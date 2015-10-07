@@ -160,13 +160,13 @@ module RenderTasks =
                         | ExecutionEngine.Native, RedundancyRemoval.None ->
                             Log.line "using unoptimized native program"
                             new Compiler.UnoptimizedProgram<_>(
-                                engine, Compiler.FragmentHandlers.native, manager, addInput, removeInput
+                                engine, Compiler.FragmentHandlers.nativeNew, manager, addInput, removeInput
                             ) :> IRenderProgram
 
                         | ExecutionEngine.Native, _ ->
                             Log.line "using optimized native program"
                             new Compiler.OptimizedProgram<_>(
-                                engine, Compiler.FragmentHandlers.native, manager, addInput, removeInput
+                                engine, Compiler.FragmentHandlers.nativeNew, manager, addInput, removeInput
                             ) :> IRenderProgram
 
                         | ExecutionEngine.Unmanaged, RedundancyRemoval.None ->

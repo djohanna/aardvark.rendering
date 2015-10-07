@@ -49,3 +49,45 @@ type NativeDynamicFragment<'a>(f : Fragment<'a>) =
             cachedStats.Clear()
             f.Clear()
 
+[<AllowNullLiteral>]
+type NativeDynamicFragmentNew<'a>(f : CodeFragment) =
+    let mutable statistics = FrameStatistics.Zero
+    let cachedStats = Dictionary<int, FrameStatistics>()
+
+    member x.Fragment = f
+
+    interface IDynamicFragment<NativeDynamicFragmentNew<'a>> with
+        member x.Statistics = statistics
+
+        member x.RunAll() =
+            failwith "native fragments cannot be invoked directly"
+
+        member x.Next
+            with get() = NativeDynamicFragmentNew(f.Next)
+            and set n = f.Next <- n.Fragment
+
+        member x.Prev
+            with get() = NativeDynamicFragmentNew(f.Prev)
+            and set n = f.Prev <- n.Fragment
+
+        member x.Append(i : seq<Instruction>) =
+            let add = i |> Seq.map InstructionStatistics.toStats |> Seq.sum
+            statistics <- { (statistics + add) with ProgramSize = uint64 f.Memory.Size }
+            let compiled = i |> Seq.map (fun i -> let a = ExecutionContext.compile i in a.functionPointer, a.args)
+            let id = f.Append (ASM.assembleCalls compiled)
+            cachedStats.[id] <- add
+
+            id
+
+        member x.Update(id : int) (i : seq<Instruction>) =
+            let oldStats = cachedStats.[id]
+            let newStats = i |> Seq.map InstructionStatistics.toStats |> Seq.sum
+            statistics <- { (statistics - oldStats + newStats) with ProgramSize = uint64 f.Memory.Size }
+            let compiled = i |> Seq.map (fun i -> let a = ExecutionContext.compile i in a.functionPointer, a.args)
+            f.Update(id, (ASM.assembleCalls compiled))
+            cachedStats.[id] <- newStats
+
+        member x.Clear() =
+            statistics <- { FrameStatistics.Zero with ProgramSize = uint64 f.Memory.Size }
+            cachedStats.Clear()
+            f.Clear()

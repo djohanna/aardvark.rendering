@@ -147,6 +147,49 @@ module FragmentHandlers =
                         hintDefragmentation 0
         }
 
+    let nativeNew() =
+        let manager = MemoryManager.createExecutable()
+        let isDisposed = ref false
+
+        let prolog = NativeDynamicFragmentNew(CodeFragment.prolog 6 manager)
+
+        let epilog = NativeDynamicFragmentNew(CodeFragment.epilog 6 manager)
+
+        let create (s : seq<Instruction>) =
+            if not (Seq.isEmpty s) then
+                failwith "cannot create non-empty fragment"
+
+            let f = manager |> CodeFragment.ofCalls []
+            NativeDynamicFragmentNew(f)
+
+
+        { new IFragmentHandler<NativeDynamicFragmentNew<unit>> with
+            member x.Dispose() =    
+                isDisposed := true
+                manager.Dispose()
+
+            member x.Prolog = prolog
+            member x.Epilog = epilog
+            member x.Create s = 
+                if not !isDisposed then
+                    create s
+                else
+                    raise <| ObjectDisposedException("handler")
+
+            member x.Delete f = 
+                if not !isDisposed then
+                    f.Fragment.Dispose()
+
+            member x.Compile() =
+                let run = CodeFragment.wrap prolog.Fragment
+                fun (f : NativeDynamicFragmentNew<unit>) ->
+                    run()
+
+            member x.AdjustStatistics s = s
+            member x.Hint op = ()
+        }
+
+
     let managed() =
         { new IFragmentHandler<ManagedDynamicFragment> with
             member x.Dispose() = ()

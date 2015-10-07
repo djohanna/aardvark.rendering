@@ -3,7 +3,7 @@
 open System
 open System.Runtime.InteropServices
 open Aardvark.Base
-
+open Aardvark.Rendering.GL
 
 [<AutoOpen>]
 module Fragments =
@@ -527,9 +527,9 @@ module Fragments =
         else
             let manager = new MemoryManager()
 
-            let prolog = Fragment(manager, 0)
-            let epilog = Fragment(manager, 0)
-            let calls = Fragment(manager, 0)
+            let prolog = Fragment<_>(manager, 0)
+            let epilog = Fragment<_>(manager, 0)
+            let calls = Fragment<_>(manager, 0)
 
             //let ptr = UnmanagedFunctions.tryFindFunctionPointer(testFun).Value
             calls.Append([ptr,[|10 :> obj|]]) |> ignore
@@ -589,13 +589,13 @@ module Fragments =
         else
             printfn "ptr: %A" ptr
 
-            let prolog = Fragment(mem, 0)
-            let epilog = Fragment(mem, 0)
+            let prolog = Fragment<_>(mem, 0)
+            let epilog = Fragment<_>(mem, 0)
             prolog.Append(Assembler.functionProlog 4) |> ignore
             epilog.Append(Assembler.functionEpilog 4) |> ignore
                 
             printfn "creating fragments"
-            let frags = Array.init 1000 (fun i -> Fragment(mem, 0, i))
+            let frags = Array.init 1000 (fun i -> Fragment<_>(mem, 0, i))
             frags |> Array.iter (fun f -> f.Append([ptr, [|f.Tag :> obj|]]) |> ignore)
             let calls = Array.init frags.Length (fun i -> ptr,[|i :> obj|])
             //let frags = frags.RandomOrder() |> Seq.toArray
