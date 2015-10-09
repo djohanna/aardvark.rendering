@@ -3,6 +3,7 @@
 open System
 open System.Runtime.InteropServices
 open Aardvark.Base
+open Aardvark.Rendering.GL
 
 
 [<AutoOpen>]
