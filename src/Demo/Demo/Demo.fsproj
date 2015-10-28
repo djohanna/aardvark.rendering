@@ -47,6 +47,8 @@
     <Compile Include="AssemblyInfo.fs" />
     <Compile Include="ApplicationSetup.fs" />
     <Compile Include="AssimpExporter.fs" />
+    <Compile Include="AssimpSg.fs" />
+    <Compile Include="TransparencyExample.fs" />
     <Compile Include="Program.fs">
     </Compile>
     <Content Include="app.config" />
