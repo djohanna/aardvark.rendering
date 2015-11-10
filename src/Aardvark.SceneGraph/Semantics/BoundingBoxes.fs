@@ -93,11 +93,13 @@ module BoundingBoxes =
                 |> ASet.foldMonoidM (curry Box3d.Union) Box3d.Invalid
             
         member x.GlobalBoundingBox(n : IApplicator) : IMod<Box3d> = 
+            n.Child.GlobalBoundingBox()
+
+        member x.GlobalBoundingBox(n : Sg.DynamicNode) : IMod<Box3d> = 
             adaptive {
-                let! low = n.Child
+                let! low = n.Child  
                 return! low.GlobalBoundingBox()
             }
-
 
     [<Semantic>]
     type LocalBoundingBoxSem() =
@@ -138,14 +140,17 @@ module BoundingBoxes =
 
         member x.LocalBoundingBox(app : Sg.TrafoApplicator) : IMod<Box3d> =  
             adaptive {
-                let! c = app.Child
+                let c = app.Child     
                 let! bb = c.LocalBoundingBox() : IMod<Box3d>
                 let! trafo = app.Trafo
                 return transform bb trafo
             }
 
         member x.LocalBoundingBox(n : IApplicator) : IMod<Box3d> = 
+            n.Child.LocalBoundingBox()
+
+        member x.LocalBoundingBox(n : Sg.DynamicNode) : IMod<Box3d> = 
             adaptive {
-                let! low = n.Child
+                let! low = n.Child  
                 return! low.LocalBoundingBox()
             }

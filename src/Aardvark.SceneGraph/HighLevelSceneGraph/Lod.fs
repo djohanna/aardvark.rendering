@@ -15,13 +15,10 @@ module Ext =
 
     type LodScope = { trafo : Trafo3d; cameraPosition : V3d; scope : Scope}
 
-    type ViewFrustumCullNode(sg : IMod<ISg>) =
+    type ViewFrustumCullNode(sg : ISg) =
         interface IApplicator with
             member x.Child = sg
         member x.Child = sg
-
-        new(s : ISg) = ViewFrustumCullNode(Mod.constant s)
-        new(s : IEvent<ISg>) = ViewFrustumCullNode(Mod.fromEvent  s)
 
     type LodNode(viewDecider : (LodScope -> bool), 
                  low : IMod<ISg>, high : IMod<ISg>) =

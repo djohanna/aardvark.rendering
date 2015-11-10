@@ -12,7 +12,7 @@ type ISg =
 
 type IApplicator =
     inherit ISg
-    abstract member Child : IMod<ISg>
+    abstract member Child : ISg
 
 type IGroup =
     inherit ISg

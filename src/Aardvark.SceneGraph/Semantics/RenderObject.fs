@@ -24,6 +24,10 @@ module RenderObjectSemantics =
     type RenderObjectSem() =
 
         member x.RenderObjects(a : IApplicator) : aset<IRenderObject> =
+            a.Child.RenderObjects()
+ 
+
+        member x.RenderObjects(a : Sg.DynamicNode) : aset<IRenderObject> =
             aset {
                 let! c = a.Child
                 yield! c.RenderObjects()

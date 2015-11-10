@@ -105,14 +105,14 @@ module SgFSharp =
 
         let vertexAttribute<'a when 'a : struct> (s : Symbol) (value : IMod<'a[]>) (sg : ISg) =
             let view = BufferView(value |> Mod.map (fun data -> ArrayBuffer(data) :> IBuffer), typeof<'a>)
-            Sg.VertexAttributeApplicator(Map.ofList [s, view], Mod.constant sg) :> ISg
+            Sg.VertexAttributeApplicator(Map.ofList [s, view], sg) :> ISg
 
         let index<'a when 'a : struct> (value : IMod<'a[]>) (sg : ISg) =
             Sg.VertexIndexApplicator(modOfArray value, sg) :> ISg
 
         let vertexAttribute'<'a when 'a : struct> (s : Symbol) (value : 'a[]) (sg : ISg) =
             let view = BufferView(Mod.constant (ArrayBuffer(value :> Array) :> IBuffer), typeof<'a>)
-            Sg.VertexAttributeApplicator(Map.ofList [s, view], Mod.constant sg) :> ISg
+            Sg.VertexAttributeApplicator(Map.ofList [s, view], sg) :> ISg
 
         let index'<'a when 'a : struct> (value : 'a[]) (sg : ISg) =
             Sg.VertexIndexApplicator(Mod.constant (value :> Array), sg) :> ISg
@@ -368,7 +368,7 @@ module SgFSharp =
         
         let normalize sg = sg |> normalizeTo ( Box3d( V3d(-1,-1,-1), V3d(1,1,1) ) ) 
 
-        let loadAsync (fboSignature : IFramebufferSignature) (sg : ISg) = Sg.AsyncLoadApplicator(fboSignature, Mod.constant sg) :> ISg
+        let loadAsync (fboSignature : IFramebufferSignature) (sg : ISg) = Sg.AsyncLoadApplicator(fboSignature, sg) :> ISg
 
 
     type IndexedGeometry with

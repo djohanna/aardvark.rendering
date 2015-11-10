@@ -12,9 +12,10 @@ open Aardvark.Base.Rendering
 [<Semantic>]
 type AsyncLoadSemantics() =
 
+
     member x.RenderObjects(app : Sg.AsyncLoadApplicator) : aset<IRenderObject> =
         aset {
-            let! child = app.Child
+            let child = app.Child
             let runtime = app.Runtime
             for ro in child.RenderObjects() do
                 let! prep = 

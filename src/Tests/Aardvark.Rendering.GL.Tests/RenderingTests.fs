@@ -383,10 +383,10 @@ module RenderingTests =
 
 
         let pi = runtime.Download(color, PixFormat.ByteRGBA)
-        pi.SaveAsImage @"C:\Users\schorsch\Desktop\test.png"
+        pi.SaveAsImage @"C:\Users\steinlechner\Desktop\test.png"
 
         let level1 = runtime.Download(color, 1, PixFormat.ByteRGBA)
-        level1.SaveAsImage @"C:\Users\schorsch\Desktop\level1.png"
+        level1.SaveAsImage @"C:\Users\steinlechner\Desktop\level1.png"
 
 
         Log.line "starting pure render test"
