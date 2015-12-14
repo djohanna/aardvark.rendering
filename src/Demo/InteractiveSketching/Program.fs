@@ -367,13 +367,53 @@ let main argv =
             |> Sg.effect [DefaultSurfaces.trafo |> toEffect; DefaultSurfaces.constantColor C4f.White |> toEffect; DefaultSurfaces.simpleLighting |> toEffect ]
             |> Sg.uniform "ViewportSize" win.Sizes
 
+
+    let random = Random()
+    let randomGeometry() =
+        
+        let cnt = random.Next(1023) + 1
+        let positions = Array.init cnt (fun _ -> V3d(random.NextDouble(), random.NextDouble(), random.NextDouble()) |> V3f.op_Explicit)
+        let colors = Array.init cnt (fun _ -> C4b(byte (random.Next(256)), byte (random.Next(256)), byte (random.Next(256)), 255uy))
+
+        IndexedGeometry(
+            Mode = IndexedGeometryMode.PointList,
+            IndexedAttributes = 
+                SymDict.ofList [
+                    DefaultSemantic.Positions, positions :> Array
+                    DefaultSemantic.Colors, colors :> Array
+                ]
+        )
+
+
+
+    let geometries = CSet.ofList (List.init 100 (fun _ -> randomGeometry()))
+
+    let attTypes =
+        Map.ofList [
+            DefaultSemantic.Positions, typeof<V3f>
+            DefaultSemantic.Colors, typeof<C4b>
+        ]
+
+
+    let sg =
+        Sg.GeometrySet(IndexedGeometryMode.PointList, attTypes, geometries)
+            |> Sg.viewTrafo viewTrafo
+            |> Sg.projTrafo proj
+            |> Sg.effect [DefaultSurfaces.trafo |> toEffect; DefaultSurfaces.pointSprite |> toEffect; DefaultSurfaces.pointSpriteFragment |> toEffect ]
+            |> Sg.uniform "ViewportSize" win.Sizes
+            |> Sg.uniform "PointSize" (Mod.constant 5)
+
+
     let main = app.Runtime.CompileRender(win.FramebufferSignature, BackendConfiguration.NativeOptimized, sg) |> DefaultOverlays.withStatistics
 
-    win.Keyboard.KeyDown(Keys.H).Values.Subscribe(fun _ ->
+    win.Keyboard.KeyDown(Keys.P).Values.Subscribe(fun _ ->
+        
+        let newGeometries = List.init 100 (fun _ -> randomGeometry())
         transact (fun () ->
-            active.Value <- not active.Value
-            printfn "%A" active.Value
+            geometries.UnionWith newGeometries
         )
+
+
     ) |> ignore
 
 
