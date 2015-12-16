@@ -107,6 +107,17 @@ module private Providers =
             member x.All = x.All 
             member x.Dispose() = x.Dispose()
 
+    type EmptyAttributeProvider private() =
+        static let instance = new EmptyAttributeProvider() :> IAttributeProvider
+        static member Instance = instance
+
+        interface System.IDisposable with
+            member x.Dispose() = ()
+
+        interface IAttributeProvider with
+            member x.TryGetAttribute _ = None
+            member x.All = Seq.empty
+
 
 
     type UniformProvider(scope : Scope,  uniforms : list<IUniformProvider>, attributeProviders : list<IAttributeProvider>) =

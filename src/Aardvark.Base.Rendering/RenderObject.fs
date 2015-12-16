@@ -40,7 +40,7 @@ type RenderObject =
         mutable IsActive : IMod<bool>
         mutable RenderPass : uint64
                 
-        mutable DrawCallInfo : IMod<DrawCallInfo>
+        mutable DrawCallInfos : IMod<DrawCallInfo[]>
         mutable Mode : IMod<IndexedGeometryMode>
         mutable Surface : IMod<ISurface>
                 
@@ -70,7 +70,7 @@ type RenderObject =
           AttributeScope = Ag.emptyScope
           IsActive = null
           RenderPass = 0UL
-          DrawCallInfo = null
+          DrawCallInfos = null
           Mode = null
           Surface = null
           DepthTest = null
@@ -120,7 +120,7 @@ module RenderObjectExtensions =
           AttributeScope = Ag.emptyScope
           IsActive = null
           RenderPass = 0UL
-          DrawCallInfo = null
+          DrawCallInfos = null
           Mode = null
           Surface = null
           DepthTest = null

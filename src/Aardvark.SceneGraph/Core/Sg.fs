@@ -310,6 +310,7 @@ module Sg =
 
         member x.FramebufferSignature = fboSignature
 
+    [<Obsolete>]
     type Environment (runtime : IRuntime, viewTrafo : IMod<Trafo3d>, projTrafo : IMod<Trafo3d>, viewSize : IMod<V2i>, child : IMod<ISg>) =
         inherit AbstractApplicator(child)
 
@@ -326,6 +327,18 @@ module Sg =
             Environment(runtime, Mod.fromEvent viewTrafo, Mod.fromEvent projTrafo, Mod.fromEvent viewSize, child)
         new(runtime : IRuntime, viewTrafo : IMod<Trafo3d>, projTrafo : IMod<Trafo3d>, viewSize : IMod<V2i>, child : ISg) =
             Environment(runtime, viewTrafo, projTrafo, viewSize, Mod.constant child)
+
+
+    type GeometrySet (mode : IndexedGeometryMode, attributeTypes : Map<Symbol, Type>, geometries : aset<IndexedGeometry>) =
+        do 
+            if mode = IndexedGeometryMode.LineStrip && mode = IndexedGeometryMode.TriangleStrip then
+                failwithf "cannot create GeometrySet with Mode: %A" mode
+
+        interface ISg
+
+        member x.Mode = mode
+        member x.Geometries = geometries
+        member x.AttributeTypes = attributeTypes
 
 
 module SceneGraphCompletenessCheck =
