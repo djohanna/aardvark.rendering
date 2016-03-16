@@ -62,7 +62,7 @@ module private Providers =
                             failwithf "could not get atttribute map %A for %A" attName scope
 
         interface IAttributeProvider with
-
+        
             member x.Dispose() =
                 cache <- None
                 scope <- emptyScope

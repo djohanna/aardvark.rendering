@@ -77,7 +77,7 @@ type RenderObject =
     member x.Path = 
         if System.Object.ReferenceEquals(x.AttributeScope,Ag.emptyScope) 
         then "EMPTY" 
-        else x.AttributeScope.Path
+        else "URDAR"//x.AttributeScope.Path
 
     static member Create() =
         { Id = RenderObjectIds.newId()
