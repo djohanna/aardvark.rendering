@@ -1542,6 +1542,16 @@ module Rewrite =
 
 
     type Font private(f : System.Drawing.Font) =
+        static let monospace = 
+            match Environment.OSVersion with
+                | Windows -> Font(new System.Drawing.Font("Consolas", 1.0f, FontStyle.Regular, GraphicsUnit.Point))
+                | _ -> Font(new System.Drawing.Font(FontFamily.GenericMonospace, 1.0f, FontStyle.Regular, GraphicsUnit.Point))
+
+        static let sans = Font(new System.Drawing.Font(FontFamily.GenericSansSerif, 1.0f, FontStyle.Regular, GraphicsUnit.Point))
+        static let serif = Font(new System.Drawing.Font(FontFamily.GenericSerif, 1.0f, FontStyle.Regular, GraphicsUnit.Point))
+
+        do printfn "%A" f.FontFamily.Name
+
         let glyphs = ConcurrentDictionary<char, IndexedGeometry>()
         let sizesABC = ConcurrentDictionary<char, V3d>()
 
@@ -1569,6 +1579,10 @@ module Rewrite =
                 let geometry = Path.toGeometry path
                 geometry
             )
+
+        static member Monospaced = monospace
+        static member SansSerif = sans
+        static member Serif = serif
 
         member x.GetOrCreateCache(r : IRuntime) =
             cache.GetOrAdd(r, fun r ->
@@ -1822,7 +1836,7 @@ module PathComponentTest =
 
                             let sd = f / sqrt (fx*fx + fy*fy)
                             let alpha = 0.5 - sd
-
+                            let alpha = pow alpha 10.0
                             if alpha > 1.0 then
                                 return V4d.IIII
                             elif alpha < 0.0 then
@@ -1894,16 +1908,9 @@ module PathComponentTest =
 
 
 
-        let test = Rewrite.Font("Consolas", FontStyle.Italic)
-//        let str = Mod.init "hi."
-//        let chars =
-//            str |> Mod.map (fun str ->
-//                let characters = layout font str
-//                characters 
-//                    |> Array.map (fun (c,b) -> Sg.ofIndexedGeometry (Glyph.geometry font c) |> Sg.trafo (Trafo3d.Translation(b.Min.X, b.Min.Y, 0.0) |> Mod.constant))
-//                    |> Sg.group'
-//            )
-//        
+        let test = Rewrite.Font.Monospaced //("Consolas", FontStyle.Italic)
+
+
 
         let fillMode = Mod.init Aardvark.Base.Rendering.FillMode.Fill
         let aa = Mod.init true
@@ -1983,6 +1990,13 @@ module PathComponentTest =
 
         win.Keyboard.KeyDown(Keys.F9).Values.Add(fun _ ->
             transact (fun () ->
+                aa.Value <- not aa.Value
+            )
+        )
+
+        win.Keyboard.KeyDown(Keys.F10).Values.Add(fun _ ->
+            transact (fun () ->
+                
                 aa.Value <- not aa.Value
             )
         )
