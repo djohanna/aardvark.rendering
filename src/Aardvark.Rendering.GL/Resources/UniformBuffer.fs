@@ -260,7 +260,7 @@ module UniformPaths =
     let private cache = Dictionary<UniformPath * Type * Type, obj>()
 
     let compileUniformPathUntyped (path : UniformPath) (inputType : Type) (outputType : Type) =
-        lock cache (fun () ->
+        goodLock123 cache (fun () ->
             let key = (path, inputType, outputType)
             match cache.TryGetValue key with
                 | (true, f) -> f
@@ -459,7 +459,7 @@ module UnmanagedUniformWriters =
 
     let internal getTemplate (target : ConversionTarget) (fields : list<UniformField>) (inputTypes : Map<Symbol, Type>) =
         let key = (target, fields, inputTypes)
-        lock templateCache (fun () ->
+        goodLock123 templateCache (fun () ->
             match templateCache.TryGetValue key with
                 | (true, template) -> template
                 | _ ->

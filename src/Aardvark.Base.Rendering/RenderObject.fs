@@ -294,10 +294,10 @@ module AttributePackingV2 =
 
 
         let removeReader (r : AdaptiveBufferReader) =
-            lock readers (fun () -> readers.Remove r |> ignore)
+            goodLock123 readers (fun () -> readers.Remove r |> ignore)
 
         let iter (f : AdaptiveBufferReader -> unit) =
-            lock readers (fun () ->
+            goodLock123 readers (fun () ->
                 for r in readers do f r
             )
 
@@ -343,13 +343,13 @@ module AttributePackingV2 =
 
         member x.GetReader() =
             let r = new AdaptiveBufferReader(x, removeReader)
-            lock readers (fun () -> readers.Add r |> ignore)
+            goodLock123 readers (fun () -> readers.Add r |> ignore)
             r :> IAdaptiveBufferReader
 
 
         /// may only be called in layout-update
         member x.Resize(count : int) =
-            lock writes (fun () ->
+            goodLock123 writes (fun () ->
                 let capacity = count * elementSize
                 if parentCapacity <> capacity then
                     parentCapacity <- capacity
@@ -360,12 +360,12 @@ module AttributePackingV2 =
         /// may only be called in layout-update
         member x.Write(ig : IndexedGeometry, ptr : managedptr) =
             if storeCapacity = parentCapacity && storage <> 0n then
-                lock writes (fun () -> writes.[ig] <- ptr)
+                goodLock123 writes (fun () -> writes.[ig] <- ptr)
 
         /// may only be called in layout-update
         member x.Remove(ig : IndexedGeometry) =
             if storeCapacity = parentCapacity && storage <> 0n then
-                lock writes (fun () -> writes.Remove ig |> ignore)
+                goodLock123 writes (fun () -> writes.Remove ig |> ignore)
 
         override x.Compute() =
             let layout = updateLayout.GetValue x
@@ -379,13 +379,13 @@ module AttributePackingV2 =
                 else
                     storage <- Marshal.AllocHGlobal(parentCapacity)
 
-                let all = lock layout (fun () -> Dictionary.toArray layout)
+                let all = goodLock123 layout (fun () -> Dictionary.toArray layout)
                 for (g, ptr) in all do
                     let offset = ptr.Offset * nativeint elementSize
                     write g offset
             else
                 let dirty = 
-                    lock writes (fun () ->
+                    goodLock123 writes (fun () ->
                         let res = Dictionary.toArray writes
                         writes.Clear()
                         res
@@ -422,21 +422,21 @@ module AttributePackingV2 =
 
 
         let write (g : IndexedGeometry) (ptr : managedptr) =
-            lock lockObj (fun () ->
+            goodLock123 lockObj (fun () ->
                 for (sem, b) in SymDict.toSeq buffers do
                     b.Resize(manager.Capacity)
                     b.Write(g, ptr)
             )
 
         let remove (g : IndexedGeometry) =
-            lock lockObj (fun () ->
+            goodLock123 lockObj (fun () ->
                 for (sem, b) in SymDict.toSeq buffers do
                     b.Resize(manager.Capacity)
                     b.Remove(g)
             )   
     
         let resize () =
-            lock lockObj (fun () ->
+            goodLock123 lockObj (fun () ->
                 for (sem, b) in SymDict.toSeq buffers do
                     b.Resize(manager.Capacity)
             )
@@ -445,7 +445,7 @@ module AttributePackingV2 =
             AdaptiveBuffer(sem, elementType, x)
 
         member private x.TryGetBuffer (sem : Symbol) =
-            lock lockObj (fun () ->
+            goodLock123 lockObj (fun () ->
                 match buffers.TryGetValue sem with
                     | (true, b) -> Some b
                     | _ ->
@@ -466,7 +466,7 @@ module AttributePackingV2 =
                 match d with
                     | Add g ->
                         let ptr = g |> faceVertexCount |> manager.Alloc
-                        lock dataRanges (fun () -> dataRanges.[g] <- ptr)
+                        goodLock123 dataRanges (fun () -> dataRanges.[g] <- ptr)
                         write g ptr
 
 
@@ -604,10 +604,10 @@ module GeometrySetUtilities =
         let readers = HashSet<AdaptiveBufferReader>()
 
         let removeReader(r : AdaptiveBufferReader) =
-            lock readers (fun () -> readers.Remove r |> ignore)
+            goodLock123 readers (fun () -> readers.Remove r |> ignore)
 
         let addDirty (r : Range1i) =
-            let all = lock readers (fun () -> readers |> HashSet.toArray)
+            let all = goodLock123 readers (fun () -> readers |> HashSet.toArray)
             all |> Array.iter (fun reader -> 
                 reader.Resize capacity
                 reader.AddDirty r
@@ -663,7 +663,7 @@ module GeometrySetUtilities =
         member x.Dispose() =
             x.Resize(0n)
             rw.Dispose()
-            lock readers (fun () -> readers.Clear())
+            goodLock123 readers (fun () -> readers.Clear())
 
         override x.Compute() =
             ReaderWriterLock.read rw (fun () ->
@@ -672,7 +672,7 @@ module GeometrySetUtilities =
 
         member private x.GetReader() =
             let r = new AdaptiveBufferReader(x, removeReader)
-            lock readers (fun () -> readers.Add r |> ignore)
+            goodLock123 readers (fun () -> readers.Add r |> ignore)
             r :> IAdaptiveBufferReader
 
         interface IAdaptiveBuffer with

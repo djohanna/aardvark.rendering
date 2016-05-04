@@ -224,7 +224,7 @@ type RenderingResultMod(res : RenderToFramebufferMod, semantic : Symbol) =
     override x.Inputs = Seq.singleton (res :> _)
 
     override x.Compute() =
-        lock res (fun () ->
+        Locking.read res (fun () ->
             let wasOutDated = res.OutOfDate
             let res = res.GetValue x
             if wasOutDated then

@@ -30,7 +30,7 @@ type MappedBuffer(ctx : Context) =
             match locks with
                 | x::xs -> x.Update (run xs)
                 | [] -> f ()
-        let locks = lock locks (fun () -> locks |> Seq.toList)
+        let locks = goodLock123 locks (fun () -> locks |> Seq.toList)
         run locks ()
 
     let unmap () =
@@ -166,12 +166,12 @@ type MappedBuffer(ctx : Context) =
             onDispose.Dispose()
 
     member x.AddLock (r : RenderTaskLock) =
-        lock locks (fun () ->
+        goodLock123 locks (fun () ->
             locks.Add r |> ignore
         )
 
     member x.RemoveLock (r : RenderTaskLock) =
-        lock locks (fun () ->
+        goodLock123 locks (fun () ->
             locks.Remove r |> ignore
         )
 

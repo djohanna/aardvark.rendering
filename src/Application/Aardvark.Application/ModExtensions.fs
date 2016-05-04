@@ -28,7 +28,7 @@ module Mod =
                 newA
             )
         oldState := state.GetValue(null)
-        lock state (fun () ->
+        goodLock123 state.Outputs (fun () ->
             state.Outputs.Add !res |> ignore
             state.AddOutput !res
         )
@@ -50,7 +50,7 @@ module Mod =
                 oldState := s 
                 newA
             )
-        lock state (fun () ->
+        goodLock123 state.Outputs (fun () ->
             state.Outputs.Add !res |> ignore
             state.AddOutput !res
         )

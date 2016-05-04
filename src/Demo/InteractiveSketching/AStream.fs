@@ -143,7 +143,7 @@ module AStream =
             s.obs.Subscribe(fun v ->
                 current <- f current v
 
-                let ro = lock res (fun () -> res.OutOfDate)
+                let ro = Locking.read res (fun () -> res.OutOfDate)
                 if not ro then transact (fun () -> res.MarkOutdated())
             )
         res
@@ -155,7 +155,7 @@ module AStream =
         let subscription = 
             s.obs.Subscribe (fun v ->
                 current <- Some v
-                let o = lock res (fun () -> res.OutOfDate)
+                let o = Locking.read res (fun () -> res.OutOfDate)
                 if not o then transact (fun () -> res.MarkOutdated())
             )
 
@@ -168,7 +168,7 @@ module AStream =
             let buffer = List()
             let subscription = s.obs.Subscribe (fun v ->
                 let o = 
-                    lock self.Value (fun () -> 
+                    Locking.read self.Value (fun () -> 
                         buffer.Add(Add v)
                         self.Value.OutOfDate
                     )

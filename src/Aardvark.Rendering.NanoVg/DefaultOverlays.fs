@@ -15,7 +15,7 @@ module Statistics =
     let private tickFunctions = Dictionary<obj, unit -> unit>()
 
     let private tick (state : obj) =
-        let functions = lock tickFunctions (fun () -> tickFunctions |> Seq.map (fun (KeyValue(_,cb)) -> cb) |> Seq.toArray)
+        let functions = goodLock123 tickFunctions (fun () -> tickFunctions |> Seq.map (fun (KeyValue(_,cb)) -> cb) |> Seq.toArray)
         for f in functions do
             f()
 
@@ -93,7 +93,7 @@ module Statistics =
         let installTick (self : TimeFrame<'a>) =
             if not tickInstalled then
                 tickInstalled <- true
-                lock tickFunctions (fun () -> 
+                goodLock123 tickFunctions (fun () -> 
                     tickFunctions.Add(self, tick)
                 )
 
@@ -121,7 +121,7 @@ module Statistics =
         override x.Finalize() =
             if tickInstalled then
                 try
-                    lock tickFunctions (fun () -> 
+                    goodLock123 tickFunctions (fun () -> 
                         tickFunctions.Remove(x) |> ignore
                     )  
                 with _ -> ()

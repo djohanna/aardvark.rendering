@@ -23,7 +23,7 @@ module private TypedBuffers =
         let buffer = new cbuffer(0n, fun b -> release())
 
         member x.AdjustToCount(count : nativeint) =
-            lock lockObj (fun () ->
+            goodLock123 lockObj (fun () ->
                 sizeInElements <- count
                 match elementTypeAndSize with
                     | Some(_,s) -> buffer.AdjustToSize(s * count)
@@ -32,7 +32,7 @@ module private TypedBuffers =
 
         member x.Write(data : Array, offsetInElements : nativeint, count : nativeint) =
             let elementSize = 
-                lock lockObj (fun () ->
+                goodLock123 lockObj (fun () ->
                     match elementTypeAndSize with
                         | Some (t,s) ->
                             assert (t = data.GetType().GetElementType())

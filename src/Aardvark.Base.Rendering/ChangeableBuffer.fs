@@ -49,7 +49,7 @@ type cbuffer(sizeInBytes : nativeint, release : cbuffer -> unit) =
             let transaction = Transaction()
             transaction.Enqueue self
 
-            lock readers (fun () ->
+            goodLock123 readers (fun () ->
                 for r in readers do
                     r.Add range
                     transaction.Enqueue r
@@ -60,11 +60,11 @@ type cbuffer(sizeInBytes : nativeint, release : cbuffer -> unit) =
 
     member x.GetReader() =
         let r = new CBufferReader(x)
-        lock readers (fun () -> readers.Add r |> ignore)
+        goodLock123 readers (fun () -> readers.Add r |> ignore)
         r :> IAdaptiveBufferReader
 
     member internal x.RemoveReader(r : CBufferReader) =
-        lock readers (fun () -> readers.Remove r |> ignore)
+        goodLock123 readers (fun () -> readers.Remove r |> ignore)
 
     member x.SizeInBytes = capacity
 
@@ -126,7 +126,7 @@ and internal CBufferReader(buffer : cbuffer) =
     let mutable lastCapacity = -1n
 
     member x.Add(r : Range1i) =
-        lock x (fun () ->
+        Locking.write x (fun () ->
             if lastCapacity = buffer.SizeInBytes then
                 Interlocked.Change(&dirty, RangeSet.insert r) |> ignore
         )

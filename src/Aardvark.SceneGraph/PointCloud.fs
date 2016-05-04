@@ -421,9 +421,7 @@ module PointCloudRenderObjectSemantics =
 
         let removeFromWorkingSet n = 
             if node.Config.boundingBoxSurface.IsSome  then
-                lock workingSet (fun () -> 
-                    transact (fun () -> workingSet.Remove n |> ignore)
-                )
+                transact (fun () -> workingSet.Remove n |> ignore)
 
         member x.WorkingSet = 
             workingSet :> aset<_>
@@ -449,7 +447,8 @@ module PointCloudRenderObjectSemantics =
                     do! Async.SwitchToNewThread()
 
                     while true do
-                        
+                        do! r.TakeAsync()
+
                         let v = view.GetValue ()
                         let p = proj.GetValue ()
                         let wantedNearPlaneDistance = wantedNearPlaneDistance.GetValue ()
@@ -467,19 +466,14 @@ module PointCloudRenderObjectSemantics =
                             let id = getId v
                             deltas.[id % queueCount].Add v
                             if content.Add v && node.Config.boundingBoxSurface.IsSome  then
-                                lock workingSet (fun () ->  
-                                    if not <| workingSet.Contains v then
-                                        transact (fun () -> CSet.add v workingSet |> ignore)
-                                )
+                                if not <| workingSet.Contains v then
+                                    transact (fun () -> CSet.add v workingSet |> ignore)
 
                         for v in rem do
                             let id = getId v
                             deltas.[id % queueCount].Remove v
                             content.Remove v |> ignore
-                            lock workingSet (fun () ->  
-                                if workingSet.Contains v then
-                                    transact (fun () -> CSet.remove v workingSet |> ignore)
-                            )
+                            transact (fun () -> CSet.remove v workingSet |> ignore)
                 }
 
             let subV = view.AddMarkingCallback (fun () -> r.Put ()) 

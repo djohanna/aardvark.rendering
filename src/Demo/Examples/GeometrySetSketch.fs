@@ -52,7 +52,7 @@ type cbuffer(sizeInBytes : nativeint, release : cbuffer -> unit) =
             let transaction = Transaction()
             transaction.Enqueue self
 
-            lock readers (fun () ->
+            goodLock123 readers (fun () ->
                 for r in readers do
                     r.Add range
                     transaction.Enqueue r
@@ -63,11 +63,11 @@ type cbuffer(sizeInBytes : nativeint, release : cbuffer -> unit) =
 
     member x.GetReader() =
         let r = new CBufferReader(x)
-        lock readers (fun () -> readers.Add r |> ignore)
+        goodLock123 readers (fun () -> readers.Add r |> ignore)
         r :> IAdaptiveBufferReader
 
     member internal x.RemoveReader(r : CBufferReader) =
-        lock readers (fun () -> readers.Remove r |> ignore)
+        goodLock123 readers (fun () -> readers.Remove r |> ignore)
 
     member x.SizeInBytes = capacity
 
@@ -129,7 +129,7 @@ and internal CBufferReader(buffer : cbuffer) =
     let mutable lastCapacity = -1n
 
     member x.Add(r : Range1i) =
-        lock x (fun () ->
+        Locking.write x (fun () ->
             if lastCapacity = buffer.SizeInBytes then
                 Interlocked.Change(&dirty, RangeSet.insert r) |> ignore
         )
@@ -194,7 +194,7 @@ type private TypedCBuffer(release : cbuffer -> unit)  =
     let buffer = new cbuffer(0n, release)
 
     member x.AdjustToCount(count : nativeint) =
-        lock lockObj (fun () ->
+        goodLock123 lockObj (fun () ->
             sizeInElements <- count
             match elementTypeAndSize with
                 | Some(_,s) -> buffer.AdjustToSize(s * count)
@@ -203,7 +203,7 @@ type private TypedCBuffer(release : cbuffer -> unit)  =
 
     member x.Write(data : Array, offsetInElements : nativeint, count : nativeint) =
         let elementSize = 
-            lock lockObj (fun () ->
+            goodLock123 lockObj (fun () ->
                 match elementTypeAndSize with
                     | Some (t,s) ->
                         assert (t = data.GetType().GetElementType())
@@ -342,7 +342,7 @@ type DrawCallSet(collapseAdjacent : bool) =
 
     member x.Add(r : Range1i) =
         let result = 
-            lock x (fun () ->
+            Locking.write x (fun () ->
                 if all.Add r then
                     ranges <- RangeSet.insert r ranges
                     true
@@ -356,7 +356,7 @@ type DrawCallSet(collapseAdjacent : bool) =
 
     member x.Remove(r : Range1i) =
         let result =
-            lock x (fun () ->
+            Locking.write x (fun () ->
                 if all.Remove r then
                     ranges <- RangeSet.remove r ranges
                     true

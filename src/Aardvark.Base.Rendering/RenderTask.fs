@@ -272,8 +272,8 @@ module private RefCountedResources =
 
         member x.Release() =
             if Interlocked.Decrement(&refCount) = 0 then
-                lock x destroy
-                transact (fun () -> x.MarkOutdated())
+                Locking.write x destroy
+                transact x.MarkOutdated
 
         override x.Compute() =
             if refCount = 0 then
@@ -418,7 +418,7 @@ module private RefCountedResources =
 
         member x.Release() =
             if Interlocked.Decrement(&refCount) = 0 then
-                lock x (fun () -> 
+                Locking.write x (fun () -> 
                     match value with
                         | Some v -> x.Destroy v
                         | None -> ()
@@ -678,7 +678,7 @@ module RenderTask =
 
         interface IRenderTask with
             member x.FramebufferSignature =
-                lock this (fun () -> processDeltas())
+                Locking.read this processDeltas
                 signature
 
             member x.Run(caller, fbo) =
@@ -707,7 +707,7 @@ module RenderTask =
                 tasks.Clear()
                 
             member x.Runtime =
-                lock this (fun () -> processDeltas())
+                Locking.read this processDeltas
                 runtime
 
             member x.FrameId = frameId

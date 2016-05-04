@@ -105,7 +105,7 @@ type StreamingTexture(ctx : Context, handle : int, mipMap : bool) =
 
     static let mark (self : StreamingTexture) =
         let action = 
-            lock self (fun () ->
+            Locking.read self (fun () ->
                 if not self.OutOfDate then
                     match Transaction.Running with
                         | Some t -> 
@@ -141,7 +141,7 @@ type StreamingTexture(ctx : Context, handle : int, mipMap : bool) =
 
     member x.Update(f : PixFormat, s : V2i, data : nativeint) =
         let pbo = swapPBOs()
-        lock pbo (fun () ->
+        goodLock123 pbo (fun () ->
             using ctx.ResourceLock (fun _ ->
                 uploadUsingPBO pbo f s data
             )
@@ -150,7 +150,7 @@ type StreamingTexture(ctx : Context, handle : int, mipMap : bool) =
 
     member x.ReadPixel(pos : V2i) =
         let pbo = lastPBO()
-        lock pbo (fun () ->
+        goodLock123 pbo (fun () ->
             using ctx.ResourceLock (fun _ ->
                 let offset = formatSize * (pos.X + pos.Y * size.X)
             

@@ -1117,7 +1117,7 @@ module YetAnotherRenderTaskImpl =
         
         override x.InputChanged (o : IAdaptiveObject) =
             match blockTable.TryGetValue o with
-                | (true, dirty) -> lock dirtyBlocks (fun () -> dirtyBlocks.Add dirty |> ignore)
+                | (true, dirty) -> goodLock123 dirtyBlocks (fun () -> dirtyBlocks.Add dirty |> ignore)
                 | _ -> ()
 
         member x.Object = obj
@@ -1127,7 +1127,7 @@ module YetAnotherRenderTaskImpl =
         member x.Update(caller : IAdaptiveObject) =
             x.EvaluateIfNeeded caller () (fun () ->
                 let blocks = 
-                    lock dirtyBlocks (fun () ->
+                    goodLock123 dirtyBlocks (fun () ->
                         let all = Seq.toList dirtyBlocks
                         dirtyBlocks.Clear()
                         all
@@ -1192,14 +1192,14 @@ module YetAnotherRenderTaskImpl =
 
         override x.InputChanged(i : IAdaptiveObject) =
             match i with
-                | :? AdaptiveGLVMFragment as f -> lock dirtyFragments (fun () -> dirtyFragments.Add f |> ignore)
+                | :? AdaptiveGLVMFragment as f -> goodLock123 dirtyFragments (fun () -> dirtyFragments.Add f |> ignore)
                 | _ -> ()
 
         override x.Run(fbo) =
             let deltas = fragmentReader.GetDelta()
 
             let dirty = 
-                lock dirtyFragments (fun () -> 
+                goodLock123 dirtyFragments (fun () -> 
                     let old = dirtyFragments
                     dirtyFragments <- HashSet()
                     old

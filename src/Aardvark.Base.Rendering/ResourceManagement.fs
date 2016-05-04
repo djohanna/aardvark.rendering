@@ -222,7 +222,7 @@ type ResourceInputSet() =
     let updateDirty(x : ResourceInputSet) =
         let rec run (level : int) (stats : FrameStatistics) = 
             let dirty = 
-                lock all (fun () ->
+                goodLock123 all (fun () ->
                     let d = dirty
                     dirty <- HashSet()
                     d
@@ -249,7 +249,7 @@ type ResourceInputSet() =
     override x.InputChanged(i : IAdaptiveObject) =
         match i with
             | :? IResource as r ->
-                lock all (fun () ->
+                goodLock123 all (fun () ->
                     if all.Contains r then dirty.Add r |> ignore
                 )
             | _ ->
@@ -261,15 +261,15 @@ type ResourceInputSet() =
 
     member x.Add (r : IResource) =
         let needsUpdate =
-            lock all (fun () ->
+            goodLock123 all (fun () ->
                 if all.Add r then
-                    lock r (fun () ->
+                    Locking.read r (fun () ->
                         if r.OutOfDate then 
                             dirty.Add r |> ignore
                             true
 
                         else 
-                            r.Outputs.Add x |> ignore
+                            goodLock123 r.Outputs (fun () -> r.Outputs.Add x |> ignore)
                             false
                     )
                 else
@@ -281,11 +281,11 @@ type ResourceInputSet() =
             updateDirty x |> ignore
 
     member x.Remove (r : IResource) =
-        lock all (fun () ->
+        goodLock123 all (fun () ->
 
             if all.Remove r then
                 dirty.Remove r |> ignore
-                lock r (fun () -> r.Outputs.Remove x |> ignore)
+                goodLock123 r.Outputs (fun () -> r.Outputs.Remove x |> ignore)
                
         )
 
@@ -295,9 +295,9 @@ type ResourceInputSet() =
         )
 
     member x.Dispose () =
-        lock all (fun () ->
+        goodLock123 all (fun () ->
             for r in all do
-                lock r (fun () -> r.Outputs.Remove x |> ignore)
+                goodLock123 r.Outputs (fun () -> r.Outputs.Remove x |> ignore)
 
             all.Clear()
             dirty.Clear()

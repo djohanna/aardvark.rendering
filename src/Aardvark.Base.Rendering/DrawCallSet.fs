@@ -13,10 +13,11 @@ type DrawCallSet(collapseAdjacent : bool) =
 
     let all = HashSet<Range1i>()
     let mutable ranges = RangeSet.empty
+    let rw = new ReaderWriterLockSlim()
 
     member x.Add(r : Range1i) =
         let result = 
-            lock x (fun () ->
+            Locking.write x (fun () ->
                 if all.Add r then
                     ranges <- RangeSet.insert r ranges
                     true
@@ -24,13 +25,13 @@ type DrawCallSet(collapseAdjacent : bool) =
                     false
             )
 
-        if result then transact (fun () -> x.MarkOutdated())
+        if result then transact x.MarkOutdated
 
         result
 
     member x.Remove(r : Range1i) =
         let result =
-            lock x (fun () ->
+            Locking.write x (fun () ->
                 if all.Remove r then
                     ranges <- RangeSet.remove r ranges
                     true
@@ -38,7 +39,7 @@ type DrawCallSet(collapseAdjacent : bool) =
                     false
             )
 
-        if result then transact (fun () -> x.MarkOutdated())
+        if result then transact x.MarkOutdated
         result
 
     override x.Compute() =

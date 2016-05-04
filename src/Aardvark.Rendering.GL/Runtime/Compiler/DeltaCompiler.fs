@@ -108,6 +108,8 @@ module DeltaCompiler =
             // TODO: surface assumed to be constant here
             let prog = me.Program.Handle.GetValue()
 
+            
+
             match me.IndirectBuffer with
                 | Some ib ->
                     yield Instructions.bindIndirectBuffer ib

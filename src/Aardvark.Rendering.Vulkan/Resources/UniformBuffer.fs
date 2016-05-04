@@ -421,7 +421,7 @@ module UniformWriters =
 
     let getTemplate (layout : UniformBufferLayout) (inputTypes : Map<Symbol, Type>) =
         let key = (layout, inputTypes)
-        lock templateCache (fun () ->
+        goodLock123 templateCache (fun () ->
             match templateCache.TryGetValue key with
                 | (true, template) -> template
                 | _ ->

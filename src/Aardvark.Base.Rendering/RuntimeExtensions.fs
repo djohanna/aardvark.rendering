@@ -14,14 +14,14 @@ type SignaturelessBackendSurface(runtime : IRuntime, s : ISurface) =
         member x.Dispose() = x.Dispose()
 
     member x.Get(signature : IFramebufferSignature) =
-        lock cache (fun () ->
+        goodLock123 cache (fun () ->
             cache.GetOrCreate(signature, fun signature ->
                 runtime.PrepareSurface(signature, s)
             )
         )
 
     member x.Dispose() =
-        lock cache (fun () ->
+        goodLock123 cache (fun () ->
             cache |> Dict.toSeq |> Seq.iter (fun (_,bs) -> runtime.DeleteSurface bs)
             cache.Clear()        
         )

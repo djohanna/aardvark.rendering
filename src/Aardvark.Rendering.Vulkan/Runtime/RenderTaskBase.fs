@@ -21,15 +21,15 @@ type InputSet(o : IAdaptiveObject) =
     abstract member Remove : IAdaptiveObject -> unit
 
     default x.Add(m : IAdaptiveObject) = 
-        lock l (fun () ->
+        goodLock123 l (fun () ->
             if inputs.Add m then
-                m.Outputs.Add o |> ignore
+                goodLock123 m.Outputs (fun () -> m.Outputs.Add o |> ignore)
         )
 
     default x.Remove (m : IAdaptiveObject) = 
-        lock l (fun () ->
+        goodLock123 l (fun () ->
             if inputs.Remove m then
-                m.Outputs.Remove o |> ignore
+                goodLock123 m.Outputs (fun () -> m.Outputs.Remove o |> ignore)
         )
 
 type RenderTaskInputSet(target : IRenderTask) =
@@ -115,7 +115,7 @@ type AbstractRenderTaskWithResources(manager : ResourceManager, fboSignature : R
         match i with
             | :? IResource as r ->
                 if r.OutOfDate then
-                    lock dirtyLock (fun () ->
+                    goodLock123 dirtyLock (fun () ->
                         dirtyResources.Add(r) |> ignore
                     )
             | _ -> ()
@@ -137,7 +137,7 @@ type AbstractRenderTaskWithResources(manager : ResourceManager, fboSignature : R
     override x.InputChanged(o : IAdaptiveObject) =
         match o with
             | :? IResource as o ->
-                lock dirtyLock (fun () ->
+                goodLock123 dirtyLock (fun () ->
                     dirtyResources.Add(o) |> ignore
                 )
             | _ -> ()
@@ -177,7 +177,7 @@ type AbstractRenderTaskWithResources(manager : ResourceManager, fboSignature : R
                 FrameStatistics.Zero
         
 
-        let res = lock dirtyLock recurse
+        let res = goodLock123 dirtyLock recurse
         res
 
     member x.GetStats() =

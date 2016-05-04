@@ -592,7 +592,7 @@ module HelloWorld =
                 if Mod.force add then
                     let g = randomPoints 10
                     transact (fun () ->
-                        lock lockObj (fun () -> geometries.Add g |> ignore)
+                        goodLock123 lockObj (fun () -> geometries.Add g |> ignore)
                         added <- added + 1
                     )
                 System.Threading.Thread.SpinWait(50000)
@@ -604,7 +604,7 @@ module HelloWorld =
                 if Mod.force rem then
                     if geometries.Count > 0 then
                         transact (fun () ->
-                            lock lockObj (fun () -> 
+                            goodLock123 lockObj (fun () -> 
                                 let g = geometries |> Seq.head
                                 geometries.Remove g |> ignore
                                 removed <- removed + 1

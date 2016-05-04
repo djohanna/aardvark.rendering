@@ -728,7 +728,7 @@ module RenderingTests =
         let task = runtime.CompileRender(app.Value |> snd |> (fun s -> s.FramebufferSignature), BackendConfiguration.NativeOptimized, renderJobs)
 
         win.Keyboard.KeyDown(Keys.P).Values.Subscribe(fun _ ->
-            lock task (fun () ->
+            Locking.read task (fun () ->
                 let task = task |> unbox<Aardvark.Rendering.GL.GroupedRenderTask.RenderTask>
                 let code = task.Program.Disassemble() |> unbox<Instruction[][]>
 
