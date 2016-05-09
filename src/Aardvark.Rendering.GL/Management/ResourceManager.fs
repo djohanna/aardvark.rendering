@@ -288,6 +288,7 @@ type ResourceManager private (parent : Option<ResourceManager>, ctx : Context, r
     let derivedCache (f : ResourceManager -> ResourceCache<'a>) =
         ResourceCache<'a>(Option.map f parent, renderTaskLock)
 
+    let shareBuffers = false
    
     let bufferManager           = Sharing.BufferManager(ctx, shareBuffers)
     let arrayBufferManager      = Sharing.ArrayBufferManager(ctx, shareBuffers)
@@ -363,7 +364,7 @@ type ResourceManager private (parent : Option<ResourceManager>, ctx : Context, r
             | _ ->
                 bufferCache.GetOrCreate<IBuffer>(data, {
                     create = fun b      -> bufferManager.Create b
-                    update = fun h b    -> bufferManager.Update(h, b)
+                    update = fun h b    -> bufferManager.Delete h; bufferManager.Create b //bufferManager.Update(h, b)
                     delete = fun h      -> bufferManager.Delete h
                     kind = ResourceKind.Buffer
                 })

@@ -24,7 +24,8 @@ module private FramebufferMemoryUsage =
 
 type Framebuffer(ctx : Context, signature : IFramebufferSignature, create : Aardvark.Rendering.GL.ContextHandle -> int, destroy : int -> unit, 
                  bindings : list<int * Symbol * IFramebufferOutput>, depth : Option<IFramebufferOutput>) =
-    inherit UnsharedObject(ctx, (fun h -> addPhysicalFbo ctx; create h), (fun h -> removePhysicalFbo ctx; destroy h))
+    inherit UnsharedObject(ctx)
+
 
     let mutable bindings = bindings
     let mutable depth = depth
@@ -48,17 +49,25 @@ type Framebuffer(ctx : Context, signature : IFramebufferSignature, create : Aard
         let depth = match depth with | Some d -> [DefaultSemantic.Depth, d] | _ -> []
         List.append bindings depth |> Map.ofList
 
+    override x.CreateHandle(h) =
+        addPhysicalFbo ctx
+        create h
+
+    override x.DestroyHandle(h) =
+        removePhysicalFbo ctx
+        destroy h
+
     member x.Size 
         with get() = size
         and set v = size <- v
 
-    member x.Update(create : Aardvark.Rendering.GL.ContextHandle -> int, b : list<int * Symbol * IFramebufferOutput>, d : Option<IFramebufferOutput>) =
-        base.Update(create)
-        bindings <- b
-        depth <- d
-        let bindings = (bindings |> List.map (fun (_,s,o) -> (s,o)))
-        let depth = match depth with | Some d -> [DefaultSemantic.Depth, d] | _ -> []
-        outputBySem <- List.append bindings depth |> Map.ofList
+//    member x.Update(create : Aardvark.Rendering.GL.ContextHandle -> int, b : list<int * Symbol * IFramebufferOutput>, d : Option<IFramebufferOutput>) =
+//        base.Update(create)
+//        bindings <- b
+//        depth <- d
+//        let bindings = (bindings |> List.map (fun (_,s,o) -> (s,o)))
+//        let depth = match depth with | Some d -> [DefaultSemantic.Depth, d] | _ -> []
+//        outputBySem <- List.append bindings depth |> Map.ofList
 
     member x.Attachments = outputBySem
     member x.Signature = signature
@@ -176,6 +185,6 @@ module FramebufferExtensions =
             removeVirtualFbo x
             f.DestroyHandles()
 
-        member x.Update (f : Framebuffer, bindings : list<int * Symbol * IFramebufferOutput>, depth : Option<IFramebufferOutput>, stencil : Option<IFramebufferOutput>) =
-            let init = init bindings depth stencil
-            f.Update(init, bindings, depth)
+//        member x.Update (f : Framebuffer, bindings : list<int * Symbol * IFramebufferOutput>, depth : Option<IFramebufferOutput>, stencil : Option<IFramebufferOutput>) =
+//            let init = init bindings depth stencil
+//            f.Update(init, bindings, depth)

@@ -19,17 +19,17 @@ open Aardvark.Rendering.GL
 /// destruction-function
 /// </summary>
 [<AbstractClass>]
-type UnsharedObject(context : Context, createHandle : ContextHandle -> int, destroyHandle : int -> unit) =
+type UnsharedObject(context : Context) =
     let mutable isLive = 1
     let mutable handleCache = new ThreadLocal<Option<ContextHandle * int>>(fun () -> None)
     let handles = ConcurrentDictionary<ContextHandle, int>()
-    let mutable createHandle = createHandle
-    
+//    let mutable createHandle = createHandle
+//    
     /// <summary>
     /// gets or creates the resource's handle for the current context.
     /// NOTE: returns 0 if no context is current.
     /// </summary>
-    let handle() =
+    member private x.handle() =
         if isLive = 0 then
             //raise <| OpenGLException(ErrorCode.InvalidOperation, "cannot use disposed VertexArrayObject")
             0
@@ -40,7 +40,7 @@ type UnsharedObject(context : Context, createHandle : ContextHandle -> int, dest
                         | Some (c,h) when c = ctx ->
                             h
                         | _ -> 
-                            let handle = handles.GetOrAdd(ctx, createHandle)
+                            let handle = handles.GetOrAdd(ctx, x.CreateHandle)
                             handleCache.Value <- Some(ctx, handle)
                             handle
                         
@@ -59,14 +59,14 @@ type UnsharedObject(context : Context, createHandle : ContextHandle -> int, dest
             let register (h : ContextHandle) =
                 h.OnMakeCurrent(fun () ->
                     match handles.TryRemove h with
-                        | (true, real) -> destroyHandle real
+                        | (true, real) -> x.DestroyHandle real
                         | _ -> ()
                 )
 
             match ContextHandle.Current with
                 | Some h -> 
                     match handles.TryRemove h with
-                        | (true, real) -> destroyHandle real
+                        | (true, real) -> x.DestroyHandle real
                         | _ -> ()
                 | None -> ()
 
@@ -74,37 +74,39 @@ type UnsharedObject(context : Context, createHandle : ContextHandle -> int, dest
             handles |> List.iter register
 
 
-    /// <summary>
-    /// destroys all handles created and installs a new creation-function
-    /// </summary>
-    member internal x.Update (create : ContextHandle -> int) =
-        if isLive = 1 then
-            
-            let old = Interlocked.Exchange(&handleCache, new ThreadLocal<Option<ContextHandle * int>>(fun () -> None))
-            old.Dispose()
-            createHandle <- create
+//    /// <summary>
+//    /// destroys all handles created and installs a new creation-function
+//    /// </summary>
+//    member internal x.Update (create : ContextHandle -> int) =
+//        if isLive = 1 then
+//            
+//            let old = Interlocked.Exchange(&handleCache, new ThreadLocal<Option<ContextHandle * int>>(fun () -> None))
+//            old.Dispose()
+//            createHandle <- create
+//
+//            let register (h : ContextHandle, real : int) =
+//                h.OnMakeCurrent(fun () ->
+//                    destroyHandle real
+//                )
+//
+//            let handleList = handles |> Seq.map (fun (KeyValue(k,v)) -> k,v) |> Seq.toList
+//            handles.Clear()
+//            handleList |> List.iter register
+//
+//            match ContextHandle.Current with
+//                | Some h -> 
+//                    let created = create h
+//                    handles.[h] <- created
+//                    handleCache.Value <- Some (h, created)
+//                | None -> ()
 
-            let register (h : ContextHandle, real : int) =
-                h.OnMakeCurrent(fun () ->
-                    destroyHandle real
-                )
-
-            let handleList = handles |> Seq.map (fun (KeyValue(k,v)) -> k,v) |> Seq.toList
-            handles.Clear()
-            handleList |> List.iter register
-
-            match ContextHandle.Current with
-                | Some h -> 
-                    let created = create h
-                    handles.[h] <- created
-                    handleCache.Value <- Some (h, created)
-                | None -> ()
-
+    abstract member CreateHandle : ContextHandle -> int
+    abstract member DestroyHandle : int -> unit
 
     member x.Context = context
-    member x.Handle = handle()
+    member x.Handle = x.handle()
 
 
     interface IContextChild with
         member x.Context = context
-        member x.Handle = handle()
+        member x.Handle = x.handle()

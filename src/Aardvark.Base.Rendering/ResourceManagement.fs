@@ -217,40 +217,69 @@ type ResourceInputSet() =
     inherit AdaptiveObject()
 
     let all = ReferenceCountingSet<IResource>()
+    let mutable scratch = Dict<Transaction, HashSet<IResource>>()
     let mutable dirty = HashSet<IResource>()
 
     let updateDirty(x : ResourceInputSet) =
+        let mutable hasSeenDrawCall = false
+        let mutable hasSeenBuffer = false
         let rec run (level : int) (stats : FrameStatistics) = 
+
             let dirty = 
                 lock all (fun () ->
                     let d = dirty
                     dirty <- HashSet()
                     d
                 )
-
             if level = 0 then
                 dirty.IntersectWith all
 
-            if level > 4 && dirty.Count > 0 then
+            if level > 0 && dirty.Count > 1 then
                 Log.warn "nested shit"
 
             let mutable stats = stats
             if dirty.Count > 0 then
                 for d in dirty do
+                    match d with
+                        | h when h.Kind = ResourceKind.Buffer-> hasSeenBuffer <- true
+                        | :? IResource<list<DrawCallInfo>> -> hasSeenDrawCall <- true
+                        | _ -> ()
                     stats <- stats + d.Update x
 
                 run (level + 1) stats
             else
                 stats
 
-        run 0 FrameStatistics.Zero
+        let r = run 0 FrameStatistics.Zero
+        if hasSeenDrawCall <> hasSeenBuffer then Log.warn "different: buffer:%A / drawCall: %A" hasSeenBuffer hasSeenDrawCall
+        if hasSeenDrawCall && not hasSeenBuffer then Log.warn "hate: buffer:%A / drawCall: %A" hasSeenBuffer hasSeenDrawCall
+        else ()
+        r
 
+    override x.AllInputsProcessed(t : Transaction) =
+        lock all (fun () ->
+            match scratch.TryRemove t with
+                | (true, set) -> 
+                    let hasDraw = set |> Seq.exists (fun r -> match r with | :? IResource<list<DrawCallInfo>> -> true | _ -> false)
+                    let hasBuffer = set |> Seq.exists (fun r -> r.Kind = ResourceKind.Buffer)
 
-    override x.InputChanged(i : IAdaptiveObject) =
+                    if hasDraw <> hasBuffer then
+                        Log.warn "dasfkljsdikgjnsdklfjkosdjfklsdjfko"
+
+                    dirty.UnionWith set
+                | _ -> ()
+        )
+
+    override x.InputChanged(t : Transaction, i : IAdaptiveObject) =
         match i with
             | :? IResource as r ->
                 lock all (fun () ->
-                    if all.Contains r then dirty.Add r |> ignore
+                    if all.Contains r then
+                        match r with
+                            | b when b.Kind = ResourceKind.Buffer -> ()
+                            | _ -> ()
+                        let set = scratch.GetOrCreate(t, fun t -> HashSet())
+                        set.Add r |> ignore
                 )
             | _ ->
                 ()

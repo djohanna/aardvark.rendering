@@ -141,7 +141,7 @@ module FsiSetup =
                 |> Sg.projTrafo (perspective win |> Mod.map Frustum.projTrafo    )  
 
 
-        let b = { BackendConfiguration.NativeOptimized with useDebugOutput = true }
+        let b = { BackendConfiguration.ManagedOptimized with useDebugOutput = true }
         let task = 
             app.Runtime.CompileRender(win.FramebufferSignature, b, sg) //|> DefaultOverlays.withStatistics
 

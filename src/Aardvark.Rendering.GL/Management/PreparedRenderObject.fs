@@ -20,10 +20,13 @@ type PreparedRenderObject =
         UniformBuffers : Map<int, IResource<UniformBufferView>>
         Uniforms : Map<int, IResource<UniformLocation>>
         Textures : Map<int, IResource<Texture> * IResource<Sampler>>
+
         Buffers : list<int * BufferView * AttributeFrequency * IResource<Buffer>>
         IndexBuffer : Option<IResource<Buffer>>
 
         IndirectBuffer : Option<IResource<IndirectBuffer>>
+        DrawCallInfos : IResource<list<DrawCallInfo>>
+
 
         mutable VertexArray : IResource<VertexArrayObject>
         VertexAttributeValues : Map<int, IMod<Option<V4f>>>
@@ -51,7 +54,7 @@ type PreparedRenderObject =
     member x.IsActive = x.Original.IsActive
     member x.RenderPass = x.Original.RenderPass
 
-    member x.DrawCallInfos = x.Original.DrawCallInfos
+//    member x.DrawCallInfos = x.Original.DrawCallInfos
     member x.Mode = x.Original.Mode
 
     member x.DepthTest = x.Original.DepthTest
@@ -85,6 +88,7 @@ type PreparedRenderObject =
                 | _ -> ()
 
             yield x.VertexArray :> _ 
+            yield x.DrawCallInfos :> _
         }
 
     member x.Update(caller : IAdaptiveObject) =
@@ -117,6 +121,7 @@ type PreparedRenderObject =
             | _ -> ()
 
         x.VertexArray.Update(caller) |> add
+        x.DrawCallInfos.Update(caller) |> add 
 
         stats
 
@@ -170,6 +175,7 @@ module PreparedRenderObject =
             Buffers = []
             IndexBuffer = None
             IndirectBuffer = None
+            DrawCallInfos = Unchecked.defaultof<_>
             VertexArray = Unchecked.defaultof<_>
             VertexAttributeValues = Map.empty
             ColorAttachmentCount = 0
@@ -194,6 +200,7 @@ module PreparedRenderObject =
                 Buffers = o.Buffers
                 IndexBuffer = o.IndexBuffer
                 IndirectBuffer = o.IndirectBuffer
+                DrawCallInfos = o.DrawCallInfos
                 VertexArray = o.VertexArray
                 VertexAttributeValues = o.VertexAttributeValues
                 ColorAttachmentCount = o.ColorAttachmentCount
@@ -399,6 +406,27 @@ type ResourceManagerExtensions private() =
                 | Some b -> Set.contains DefaultSemantic.Depth b
                 | None -> true
 
+        let drawCallInfos =
+            let input =rj.DrawCallInfos
+            if isNull input then
+                { new Resource<list<DrawCallInfo>>(ResourceKind.Unknown) with
+                    member x.Create(old) =
+                        [], FrameStatistics.Zero
+
+                    member x.Destroy(g) =
+                        ()
+                }
+            else
+                { new Resource<list<DrawCallInfo>>(ResourceKind.Unknown) with
+                    member x.Create(old) =
+                        input.GetValue x, FrameStatistics.Zero
+
+                    member x.Destroy(g) =
+                        ()
+                }
+
+        drawCallInfos.AddRef()
+
         // finally return the PreparedRenderObject
         {
             Activation = activation
@@ -414,6 +442,7 @@ type ResourceManagerExtensions private() =
             Buffers = buffers
             IndexBuffer = index
             IndirectBuffer = indirect
+            DrawCallInfos = drawCallInfos
             VertexArray = vao
             VertexAttributeValues = attributeValues
             ColorAttachmentCount = attachmentCount

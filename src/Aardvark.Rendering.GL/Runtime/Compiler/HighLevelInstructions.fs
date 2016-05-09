@@ -231,14 +231,15 @@ module Instructions =
 
 
         instruction |> Mod.map (fun (mode,i) ->
-            if hasTess then
-                let size = patchSize mode
-                [ Instruction.PatchParameter (int OpenTK.Graphics.OpenGL4.PatchParameterInt.PatchVertices) size; i]
-            else
-                [i]
+              []
+//            if hasTess then
+//                let size = patchSize mode
+//                [ Instruction.PatchParameter (int OpenTK.Graphics.OpenGL4.PatchParameterInt.PatchVertices) size; i]
+//            else
+//                [i]
         )
 
-    let draw (program : Program) (indexArray : IMod<System.Array>) (call : IMod<list<DrawCallInfo>>) (mode : IMod<IndexedGeometryMode>) (isActive : IMod<bool>) =
+    let draw (vao : IMod<VertexArrayObject>) (program : Program) (indexArray : IMod<System.Array>) (call : IMod<list<DrawCallInfo>>) (mode : IMod<IndexedGeometryMode>) (isActive : IMod<bool>) =
         let hasTess = program.Shaders |> List.exists (fun s -> s.Stage = ShaderStage.TessControl)
 
         let indexType = 
@@ -254,16 +255,33 @@ module Instructions =
                 | IndexedGeometryMode.TriangleList -> 3
                 | m -> failwithf "unsupported patch-mode: %A" m
 
+        let clampCall (vao : VertexArrayObject) (draw : DrawCallInfo) =
+            let mutable draw = draw
+            let maxVertices = vao.MaxVertexCount - draw.FirstIndex
+            let maxInstances = vao.MaxInstanceCount - draw.FirstInstance
+            if draw.FaceVertexCount > maxVertices then
+                Log.warn "vertex count out of bounds"
+                draw.FaceVertexCount <- maxVertices
+
+            if draw.InstanceCount > maxInstances then
+                Log.warn "instance count out of bounds"
+                draw.InstanceCount <- maxInstances
+
+            draw
+
         let instruction  =
             adaptive {
                 let! igMode = mode
                 let! (indexed, indexType) = indexType
                 let! (isActive) = isActive
+                let! vao = vao
 
                 let! calls = call
                 return 
                     igMode,
                     calls |> List.map (fun call ->
+                        let call = clampCall vao call
+
                         let faceVertexCount =
                             if isActive then call.FaceVertexCount
                             else 0

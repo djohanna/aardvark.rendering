@@ -156,7 +156,7 @@ module StepwiseQueueExection =
     open StepwiseProgress
 
 
-    let runEffects (c : ConcurrentDeltaQueue<'a>) (f : CancellationToken -> 'a -> Stepwise<unit>)  =
+    let runEffects (c : ConcurrentDeltaQueue<'a>) (f : CancellationToken -> 'a -> Stepwise<unit>) (undo : 'a -> unit)  =
         let cache = ConcurrentDictionary<'a, Stepwise<unit> * CancellationTokenSource>()
         let working = ConcurrentHashSet<'a>()
         let a =
@@ -174,10 +174,14 @@ module StepwiseQueueExection =
                                     let cts = new CancellationTokenSource()
                                     let s = f cts.Token v
                                     s,cts)
-                                match Stepwise.run cts.Token stepwise with
-                                    | [] -> Log.line "cancelled something"
-                                    | undoThings -> 
-                                        cts.Token.Register(fun () -> List.iter (fun i -> i ()) undoThings) |> ignore
+                                if cts.Token.IsCancellationRequested then
+                                    undo v
+                                else
+                                    cts.Token.Register(fun () -> undo v) |> ignore
+                                    match Stepwise.run cts.Token stepwise with
+                                        | [] -> Log.line "cancelled something"
+                                        | undoThings -> 
+                                            cts.Token.Register(fun () -> List.iter (fun i -> i ()) undoThings) |> ignore
                             | Rem v ->
                                 match cache.TryRemove(v) with
                                     | (true,(stepwise,cts)) ->
@@ -492,7 +496,6 @@ module PointCloudRenderObjectSemantics =
 
             let effect (ct : CancellationToken) (n : LodDataNode) =
                 stepwise {
-                    do! Stepwise.register (fun () -> removeFromWorkingSet n) // also if cancelled remove
                     let data =  
                         try 
                             Async.RunSynchronously(node.Data.GetData(n), cancellationToken = ct) |> Some
@@ -550,7 +553,7 @@ module PointCloudRenderObjectSemantics =
 
 
             for i in 0..queueCount-1 do
-                let deltaProcessing,info =  StepwiseQueueExection.runEffects deltas.[i] effect
+                let deltaProcessing,info =  StepwiseQueueExection.runEffects deltas.[i] effect removeFromWorkingSet
                 Async.StartAsTask(deltaProcessing, cancellationToken = cancel.Token) |> ignore
             
             if pruning then Async.StartAsTask(pruningTask, cancellationToken = cancel.Token) |> ignore
@@ -609,7 +612,7 @@ module PointCloudRenderObjectSemantics =
 
             let calls = h.DrawCallInfos
 
-            obj.IndirectBuffer <- calls |> Mod.map (fun a -> ArrayBuffer(a) :> IBuffer)
+            obj.IndirectBuffer <- Mod.constant (ArrayBuffer Array.empty<DrawCallInfo> :> IBuffer)// calls |> Mod.map (fun a -> ArrayBuffer(a) :> IBuffer)
             obj.Activate <- h.Activate
             obj.VertexAttributes <- h.Attributes
             obj.Mode <- Mod.constant IndexedGeometryMode.PointList

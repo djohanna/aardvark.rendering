@@ -23,11 +23,27 @@ module private VaoMemoryUsage =
         Interlocked.Decrement(&ctx.MemoryUsage.VirtualVertexArrayObjectCount) |> ignore
 
 
-type VertexArrayObject(context : Context, bindings : list<int * AttributeDescription>, index : Option<Buffer>, create : int -> unit) =
-    inherit UnsharedObject(context, (fun _ -> let h = GL.GenVertexArray()
-                                              addPhysicalVao context; create h; h), 
-                                    (fun h -> removePhysicalVao context; 
-                                              GL.DeleteVertexArray h))
+type VertexArrayObject(context : Context, bindings : list<int * AttributeDescription>, index : Option<Buffer>, create : int -> int * int) =
+    inherit UnsharedObject(context)
+
+    let mutable maxVertexCount = 0
+    let mutable maxInstanceCount = 0
+
+
+    override x.CreateHandle(ctx) =
+        let h = GL.GenVertexArray()
+        addPhysicalVao context
+        let (maxv, maxi) = create h
+        maxVertexCount <- maxv
+        maxInstanceCount <- maxi
+        h
+
+    override x.DestroyHandle(h) =
+        removePhysicalVao context
+        GL.DeleteVertexArray h
+       
+    member x.MaxVertexCount = maxVertexCount
+    member x.MaxInstanceCount = maxInstanceCount
         
     member x.Bindings = bindings
     member x.Index = index
@@ -41,31 +57,47 @@ module VertexArrayObjectExtensions =
         GL.BindVertexArray handle
         GL.Check "could not bind VertexArrayObjects"
 
+        let mutable maxVertexCount = Int32.MaxValue
+        let mutable maxInstanceCount = Int32.MaxValue
+
         for (id, att) in attributes do
 
 
             GL.BindBuffer(BufferTarget.ArrayBuffer, att.Buffer.Handle)
             GL.Check "could not bind buffer"
 
+            // TODO: respect stride!!
+            let cnt = (att.Buffer.SizeInBytes - nativeint att.Offset) / nativeint att.ElementSize |> int
+            match att.Frequency with
+                | PerVertex -> maxVertexCount <- min maxVertexCount cnt
+                | PerInstances step -> maxInstanceCount <- min maxInstanceCount (cnt * step)
+ 
+
 
             if att.Type = typeof<M44f> then
                 for i in 0..3 do
                     let id = id + i
 
-                    match att.Frequency with
-                        | PerVertex -> GL.VertexAttribDivisor(id, 0)
-                        | PerInstances s -> GL.VertexAttribDivisor(id, s)
-                    GL.Check "could not set vertex attribute frequency"
+                    if handle <> 0 then
+                        match att.Frequency with
+                            | PerVertex -> GL.VertexAttribDivisor(id, 0)
+                            | PerInstances s -> GL.VertexAttribDivisor(id, s)
+                        GL.Check "could not set vertex attribute frequency"
 
-                    GL.EnableVertexAttribArray(id)
-                    GL.Check "could not enable vertex attribute array"
+                        GL.EnableVertexAttribArray(id)
+                        GL.Check "could not enable vertex attribute array"
 
-                    GL.VertexAttribPointer(id, 4, VertexAttribPointerType.Float, false, 16 * sizeof<float32>, 4 * i * sizeof<float32>)
+                        GL.BindBuffer(BufferTarget.ArrayBuffer, att.Buffer.Handle)
+
+                        GL.VertexAttribPointer(id, 4, VertexAttribPointerType.Float, false, 16 * sizeof<float32>, 4 * i * sizeof<float32>)
+                    else
+                        Log.warn "hate"
+                        GL.DisableVertexAttribArray id
            
             else
-                if (att.Buffer.Handle = 0) then
+                if att.Buffer.Handle = 0 then
                     //GL.VertexAttrib4(id, Vector4(0.0f, 0.0f, 1.0f, 1.0f)) // this way a default can be defined
-                    GL.DisableVertexAttribArray(id)
+                    GL.DisableVertexAttribArray id
 
                     GL.Check "could not disable vertex attribute array"
                 else
@@ -98,6 +130,8 @@ module VertexArrayObjectExtensions =
 
         match index with
             | Some index ->
+                let cnt = int index.SizeInBytes / sizeof<int> // TODO: other index types
+                maxVertexCount <- cnt
                 GL.BindBuffer(BufferTarget.ElementArrayBuffer, index.Handle)
                 GL.Check "could not bind element buffer"
             | None ->
@@ -106,6 +140,16 @@ module VertexArrayObjectExtensions =
 
         GL.BindVertexArray 0
         GL.Check "could not unbind VertexArrayObjects"
+
+        let maxVertexCount = 
+            if maxVertexCount = Int32.MaxValue then 0
+            else maxVertexCount
+
+        let maxInstanceCount = 
+            if maxInstanceCount = Int32.MaxValue then 1
+            else maxInstanceCount
+
+        maxVertexCount, maxInstanceCount
 
     type Context with
         member x.CreateVertexArrayObject(index : Buffer, attributes : list<int * AttributeDescription>) =
@@ -119,24 +163,6 @@ module VertexArrayObjectExtensions =
         member x.Delete(vao : VertexArrayObject) =
             removeVirtualVao x
             vao.DestroyHandles()
-
-        member x.Update(vao : VertexArrayObject, index : Buffer, attributes : list<int * AttributeDescription>) =
-            let newInitFun h =
-                let h = GL.GenVertexArray()
-                addPhysicalVao vao.Context
-                init (Some index) attributes h
-                h
-
-            vao.Update(newInitFun)
-
-        member x.Update(vao : VertexArrayObject, attributes : list<int * AttributeDescription>) =
-            let newInitFun h =
-                let h = GL.GenVertexArray()
-                addPhysicalVao vao.Context
-                init None attributes h
-                h
-
-            vao.Update(newInitFun)
 
 
     module ExecutionContext =

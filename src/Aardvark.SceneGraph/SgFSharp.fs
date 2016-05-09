@@ -339,7 +339,13 @@ module SgFSharp =
                         BaseVertex = 0
                     )
                 )
+            let m44Trafos = trafos |> Mod.map (fun a -> a |> Array.map (fun (t : Trafo3d) -> (M44f.op_Explicit t.Forward).Transposed) :> Array)
+            let ibuffer = m44Trafos |> Mod.map (fun a -> ArrayBuffer a :> IBuffer)
 
+            let call = Mod.map2 (fun c _ -> c) call ibuffer
+            let m44Bla = Mod.map2 (fun _ m -> m) call ibuffer
+
+            let m44View = BufferView(m44Bla, typeof<M44f>)
             let sg = Sg.VertexAttributeApplicator(vertexAttributes, Sg.RenderNode(call, Mod.constant g.Mode)) :> ISg
         
             let sg =
@@ -348,8 +354,6 @@ module SgFSharp =
                 else
                     sg
 
-            let m44Trafos = trafos |> Mod.map (fun a -> a |> Array.map (fun (t : Trafo3d) -> (M44f.op_Explicit t.Forward).Transposed) :> Array)
-            let m44View = BufferView(m44Trafos |> Mod.map (fun a -> ArrayBuffer a :> IBuffer), typeof<M44f>)
 
             Sg.InstanceAttributeApplicator([DefaultSemantic.InstanceTrafo, m44View] |> Map.ofList, sg) :> ISg
 

@@ -381,21 +381,26 @@ module BufferExtensions =
                 GL.BindBuffer(BufferTarget.ArrayBuffer, buffer.Handle)
                 GL.Check "failed to bind buffer"
 
-                if buffer.SizeInBytes <> nativeSize then
-                    removeBuffer x (int64 buffer.SizeInBytes)
-                    addBuffer x (int64 nativeSize)
+                if size = 0 then
+                    Log.warn "size 0 buffer upload"
+                    GL.BufferData(BufferTarget.ArrayBuffer, nativeSize, 0n, BufferUsageHint.DynamicDraw)
                     buffer.SizeInBytes <- nativeSize
-                    GL.BufferData(BufferTarget.ArrayBuffer, nativeSize, src, BufferUsageHint.DynamicDraw)
-                    GL.Check "failed to set buffer data"
                 else
-                    let target = GL.MapBufferRange(BufferTarget.ArrayBuffer, 0n, nativeSize, BufferAccessMask.MapWriteBit)
-                    GL.Check "failed to map buffer for writing"
+                    if buffer.SizeInBytes <> nativeSize then
+                        removeBuffer x (int64 buffer.SizeInBytes)
+                        addBuffer x (int64 nativeSize)
+                        buffer.SizeInBytes <- nativeSize
+                        GL.BufferData(BufferTarget.ArrayBuffer, nativeSize, src, BufferUsageHint.DynamicDraw)
+                        GL.Check "failed to set buffer data"
+                    else
+                        let target = GL.MapBufferRange(BufferTarget.ArrayBuffer, 0n, nativeSize, BufferAccessMask.MapWriteBit)
+                        GL.Check "failed to map buffer for writing"
 
-                    // TODO: Marshal.Copy should possibly take int64 sizes
-                    Marshal.Copy(src, target, size)
+                        // TODO: Marshal.Copy should possibly take int64 sizes
+                        Marshal.Copy(src, target, size)
 
-                    GL.UnmapBuffer(BufferTarget.ArrayBuffer) |> ignore
-                    GL.Check "failed to unmap buffer"
+                        GL.UnmapBuffer(BufferTarget.ArrayBuffer) |> ignore
+                        GL.Check "failed to unmap buffer"
 
 
                 GL.BindBuffer(BufferTarget.ArrayBuffer, 0)
