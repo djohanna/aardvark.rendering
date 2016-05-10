@@ -352,6 +352,7 @@ module ProgramExtensions =
             | ShaderStage.TessEval -> ShaderType.TessEvaluationShader
             | ShaderStage.Geometry -> ShaderType.GeometryShader
             | ShaderStage.Pixel -> ShaderType.FragmentShader
+            | ShaderStage.Compute -> ShaderType.ComputeShader
             | _ -> failwithf "unknown shader-stage: %A" stage
 
     let private versionRx = System.Text.RegularExpressions.Regex @"#version[ \t]+(?<version>.*)"
@@ -440,6 +441,7 @@ module ProgramExtensions =
             let tev = code.Contains "void TEV"
             let gs = code.Contains "void GS("
             let fs = code.Contains "void PS("
+            let cs = code.Contains "void CS("
 
             let stages =
                 [
@@ -448,6 +450,7 @@ module ProgramExtensions =
                     if tev then yield "TessEval", "TEV", ShaderStage.TessEval
                     if gs then yield "Geometry", "GS", ShaderStage.Geometry
                     if fs then yield "Pixel", "PS", ShaderStage.Pixel
+                    if cs then yield "Compute", "CS", ShaderStage.Compute
                 ]
 
             let codeWithDefine = addPreprocessorDefine "__SHADER_STAGE__" code

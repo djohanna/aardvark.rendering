@@ -156,7 +156,7 @@ type ShaderStage =
     | TessEval = 3
     | Geometry = 4
     | Pixel = 5
-
+    | Compute = 6
 
 
 type BackendSurface(code : string, entryPoints : Dictionary<ShaderStage, string>, uniforms : SymbolDict<IMod>, samplerStates : SymbolDict<SamplerStateDescription>, semanticMap : SymbolDict<Symbol>) =

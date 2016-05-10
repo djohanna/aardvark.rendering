@@ -49,6 +49,39 @@ type CameraMode =
     | Rotate
 
 
+let computeCode = """#version 430
+
+struct DrawCallInfo {
+    int FaceVertexCount;
+    int InstanceCount;
+    int FirstIndex;
+    int FirstInstance;
+    int BaseVertex;
+
+};
+
+layout(binding = 0) buffer InOut {
+    DrawCallInfo elements[];
+};
+
+layout (local_size_x = 128, local_size_y = 1) in;
+void CS() 
+{
+    uint id = gl_GlobalInvocationID.x;
+    int fi = elements[id].FirstInstance;
+    elements[id].FirstInstance = elements[id].BaseVertex;
+    elements[id].BaseVertex = fi;
+}
+
+"""
+
+open Aardvark.Rendering.GL
+let testCompute (s) (ctx : Aardvark.Rendering.GL.Context) =
+    
+    ctx.TryCompileProgram(s, computeCode) |> printfn "%A"
+    
+
+    ()
 
 [<EntryPoint>]
 let main argv = 
@@ -58,6 +91,9 @@ let main argv =
     use app = new OpenGlApplication()
     use win = app.CreateSimpleRenderWindow(16)
     
+    let s = app.Runtime.CreateFramebufferSignature(1, [])
+    testCompute s app.Runtime.Context
+    Environment.Exit 0
 
     let cam = CameraViewWithSky(Location = V3d.III * 2.0, Forward = -V3d.III.Normalized)
     let proj = CameraProjectionPerspective(60.0, 0.1, 1000.0, float win.Width / float win.Height)
