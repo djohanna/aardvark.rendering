@@ -102,6 +102,7 @@ type IMappedBuffer =
 
     abstract member Write : ptr : nativeint * offset : int * sizeInBytes : int -> unit
     abstract member Read : ptr : nativeint * offset : int * sizeInBytes : int -> unit
+    abstract member Use : offset : nativeint * size : nativeint * (nativeint -> 'a) -> 'a
 
     abstract member Capacity : int
     abstract member Resize : newCapacity : int -> unit

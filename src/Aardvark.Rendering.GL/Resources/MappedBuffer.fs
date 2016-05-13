@@ -151,6 +151,8 @@ type MappedBuffer(ctx : Context) =
             res
         )
 
+
+
     override x.Compute() =
         deleteOldBuffers()
 
@@ -178,6 +180,7 @@ type MappedBuffer(ctx : Context) =
     interface IMappedBuffer with
         member x.Write(sourcePtr, offset, size) = x.Write(sourcePtr,offset,size)
         member x.Read(targetPtr, offset, size) = x.Read(targetPtr,offset,size)
+        member x.Use(off,size,f) = x.Use(off, size, f)
         member x.Capacity = x.Capacity
         member x.Resize(newCapacity) = x.Resize(newCapacity) 
         member x.Dispose() = x.Dispose()

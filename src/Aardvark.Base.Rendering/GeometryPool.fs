@@ -7,6 +7,9 @@ open System.Threading
 open System.Runtime.InteropServices
 open Aardvark.Base
 open Aardvark.Base.Incremental
+open Microsoft.FSharp.NativeInterop
+
+#nowarn "9"
 
 [<AutoOpen>]
 module private TypedBuffers =
@@ -230,6 +233,255 @@ type GeometryPool(runtime : IRuntime, asyncWrite : bool) =
 
     interface IDisposable with
         member x.Dispose() = x.Dispose()
+
+
+
+
+
+
+module BufferMonster = 
+    open System.Reflection
+    open System.Collections.Concurrent
+    
+    [<AutoOpen>]
+    module Utils = 
+        type ITypedBuffer =
+            inherit IDisposable
+            abstract member Buffer : IMod<IBuffer>
+            abstract member Type : Type
+            abstract member Write : source : IBuffer * sourceType : Type * sourceOffset : int64 * targetOffset : int64 * count : int64 -> unit
+            abstract member Resize : count : int64 -> unit
+
+        type Buffer<'a when 'a : unmanaged>(r : IRuntime) =
+            static let elementSize = sizeof<'a> |> int64
+
+            static let writers = ConcurrentDictionary<Type, IBufferWriter>()
+
+            static let getWriter (inputType : Type) =
+                writers.GetOrAdd(inputType, fun inputTpye ->
+                    if typeof<'a> = inputType then
+                        let writerType = typedefof<BufferWriter<int>>.MakeGenericType [| inputType |]
+                        let prop = writerType.GetProperty("Instance", BindingFlags.NonPublic ||| BindingFlags.Public ||| BindingFlags.Static)
+                        prop.GetValue(null) |> unbox<IBufferWriter>
+                    else
+                        let writerType = typedefof<BufferWriter<int, int>>.MakeGenericType [| inputType; typeof<'a> |]
+                        let prop = writerType.GetProperty("Instance", BindingFlags.NonPublic ||| BindingFlags.Public ||| BindingFlags.Static)
+                        prop.GetValue(null) |> unbox<IBufferWriter>
+                )
+
+            let mutable currentSize = 0L
+            let store = r.CreateMappedBuffer()
+
+
+            member x.Type = typeof<'a>
+
+            member x.Write(source : IBuffer, sourceType : Type, sourceOffset : int64, targetOffset : int64, count : int64) =
+                let writer = getWriter sourceType
+
+                match source with
+                    | :? INativeBuffer as source ->
+                        source.Use (fun ptr ->
+                            let ptr = ptr + nativeint (sourceOffset * elementSize)
+                            writer.Write(ptr, store, targetOffset, count)
+                        )
+                    | _ ->
+                        failwithf "[Buffer] unsupported input-buffer: %A" source
+
+            member x.Resize(count : int64) =
+                let size = elementSize * count
+                if Interlocked.Exchange(&currentSize, size) <> size then
+                    store.Resize(int size)
+
+            member x.Dispose() =
+                if Interlocked.Exchange(&currentSize, 0L) <> 0L then
+                    store.Dispose()
+            
+            interface ITypedBuffer with
+                member x.Buffer = store :> IMod<_>
+                member x.Type = x.Type
+                member x.Write(s,st,so,t,c) = x.Write(s,st,so,t,c)
+                member x.Resize(c) = x.Resize(c)
+                member x.Dispose() = x.Dispose()
+
+        and IBufferWriter =
+            abstract member Write : source : nativeint * target : IMappedBuffer * targetOffset : int64 * count : int64 -> unit
+
+        and BufferWriter<'a when 'a : unmanaged> private() =
+            static let elementSize = sizeof<'a> |> int64
+            static let instance = BufferWriter<'a>()
+        
+            member x.Write(source : nativeint, buffer : IMappedBuffer, targetOffset : int64, count : int64) =
+                buffer.Write(source, int (targetOffset * elementSize), int (count * elementSize))
+
+            static member Instance = instance
+
+        and BufferWriter<'i, 't when 'i : unmanaged and 't : unmanaged> private() =
+            static let tSize = sizeof<'t> |> nativeint
+            static let iSize = sizeof<'i> |> nativeint
+            static let conversion = PrimitiveValueConverter.converter<'i, 't>
+            static let instance = BufferWriter<'i, 't>()
+
+            member x.Write(source : nativeint, buffer : IMappedBuffer, targetOffset : int64, count : int64) =
+                let count = nativeint count
+                let offset = tSize * nativeint targetOffset
+                let size = tSize * count
+
+                buffer.Use (offset, size, fun target ->
+                    let mutable source = source
+                    let mutable target = target
+
+                    let se = source + count * iSize
+
+                    let mutable targetOffset = int targetOffset
+                    while source < se do
+                        let value =
+                            source
+                                |> NativePtr.ofNativeInt<'i>
+                                |> NativePtr.read
+                                |> conversion
+
+                        NativePtr.write (NativePtr.ofNativeInt target) value
+                        source <- source + iSize
+                        target <- target + tSize
+                
+                )
+
+            interface IBufferWriter with
+                member x.Write(s,b,t,cnt) = x.Write(s,b,t,cnt)
+
+            static member Instance = instance
+
+    type BufferPool(runtime : IRuntime, inputs : SymbolDict<Type>) =
+        let layout = MemoryManager.createNop()
+
+        let mutable currentCount = 0
+        let buffers = 
+            inputs |> SymDict.map (fun sem t ->
+                let t = typedefof<Buffer<int>>.MakeGenericType [|t|]
+                Activator.CreateInstance(t) |> unbox<ITypedBuffer>
+            )
+
+        let bufferLock = new ReaderWriterLockSlim()
+
+        let getBufferViews (att : IAttributeProvider) =
+            buffers
+                |> SymDict.toSeq 
+                |> Seq.choose (fun (sem,target) ->
+                    match att.TryGetAttribute(sem) with
+                        | Some view -> Some(target, view)
+                        | None -> None
+                   )
+                |> Dict.ofSeq
+
+        let getBufferSizeInBytes(b : IBuffer) =
+            match b with
+                | :? INativeBuffer as b -> b.SizeInBytes
+                | _ -> failwith "[BufferPool] cannot get size for gpu buffer atm."
+
+        let checkCounts() =
+            let cap = layout.Capacity
+            if Interlocked.Exchange(&currentCount, cap) <> cap then
+                ReaderWriterLock.write bufferLock (fun () ->
+                    for (KeyValue(_,b)) in buffers do
+                        b.Resize (int64 cap)
+                )
+
+        member x.Add(calls : IMod<list<DrawCallInfo>>, att : IAttributeProvider) : BufferPoolSlot =
+            let views = getBufferViews att
+            let viewArr = Dict.toArray views
+
+            let current : ref<Option<managedptr>> = ref None
+            let targetPtr = 
+                Mod.custom (fun self ->
+                    let calls = calls.GetValue self
+                    let count = calls |> List.sumBy (fun c -> c.FaceVertexCount)
+
+                    let ptr = 
+                        match !current with
+                            | Some old when old.Size = count -> 
+                                old
+
+                            | Some o -> 
+                                layout.Free o
+                                layout.Alloc count
+
+                            | None -> 
+                                layout.Alloc count
+
+                    checkCounts()
+                    current := Some ptr
+                    Range1i.FromMinAndSize(int ptr.Offset, ptr.Size)
+                )
+
+            let writers =
+                viewArr |> Array.map (fun (target, view) ->
+                    Mod.custom (fun self ->
+                        let input = view.Buffer.GetValue self
+                        let calls = calls.GetValue self
+                        let ptr = targetPtr.GetValue self
+
+                        let mutable targetOffset = int64 ptr.Min
+                        for c in calls do
+                            let offset = c.FirstIndex + view.Offset
+                            let count = c.FaceVertexCount
+                            target.Write(input, view.ElementType, int64 offset, targetOffset, int64 count)
+                            targetOffset <- targetOffset + int64 count
+
+                    )
+                )
+
+            BufferPoolSlot(current, calls, att, writers)
+
+        member x.Remove(slot : BufferPoolSlot) : unit =
+            match slot.CurrentPointer with
+                | Some c -> layout.Free c
+                | _ -> ()
+
+        member x.TryGetAttribute(sem : Symbol) : Option<BufferView> =
+            match buffers.TryGetValue sem with
+                | (true, b) -> BufferView(b.Buffer, inputs.[sem]) |> Some
+                | _ -> None
+
+        member x.Dispose() : unit =
+            layout.Dispose()
+            buffers.Values |> Seq.iter (fun b -> b.Dispose())
+            bufferLock.Dispose()
+
+        interface IDisposable with
+            member x.Dispose() = x.Dispose()
+
+        new(runtime : IRuntime, surface : IBackendSurface) = 
+            new BufferPool(
+                runtime, 
+                surface.Inputs |> List.map (fun (n,t) -> Symbol.Create n, t) |> SymDict.ofList
+            )
+
+    and BufferPoolSlot(current : ref<Option<managedptr>>, calls : IMod<list<DrawCallInfo>>, att : IAttributeProvider, writers : IMod<unit>[]) =
+        inherit AdaptiveObject()
+        let mutable currentRange = Range1i.Invalid
+
+        member internal x.CurrentPointer = !current
+
+        member x.Update(caller : IAdaptiveObject) =
+            x.EvaluateIfNeeded caller () (fun () ->
+                for w in writers do
+                    w.GetValue x
+
+            )
+
+        member x.DrawCallInfo =
+            let ptr = current.Value.Value
+            DrawCallInfo(
+                FaceVertexCount = ptr.Size,
+                FirstIndex = int ptr.Offset,
+                InstanceCount = 1
+            )
+
+
+
+
+
+
 
 [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
 module GeometryPool =
