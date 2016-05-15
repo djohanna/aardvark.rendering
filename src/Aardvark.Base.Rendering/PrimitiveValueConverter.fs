@@ -10,7 +10,7 @@ open Microsoft.FSharp.Reflection
 
 module PrimitiveValueConverter =
     let private trafoToM44f(t : Trafo3d) =
-        M44f.op_Explicit (t.Forward)
+        M44f.op_Explicit (t.Forward.Transposed)
 
     let private integralConversions =
         [
@@ -170,8 +170,8 @@ module PrimitiveValueConverter =
             ( fun (b : V2i)        -> V3d(float b.X, float b.Y,0.0) ) :> obj
             ( fun (b : V2i)        -> V4i(b.X, b.Y, 0, 0) ) :> obj
             ( fun (b : V2i)        -> V4l(int64 b.X, int64 b.Y, 0L, 0L) ) :> obj
-            ( fun (b : V2i)        -> V4f(float32 b.X, float32 b.Y, 0.0f, 0.0f) ) :> obj
-            ( fun (b : V2i)        -> V4d(float b.X, float b.Y, 0.0, 0.0) ) :> obj
+            ( fun (b : V2i)        -> V4f(float32 b.X, float32 b.Y, 0.0f, 1.0f) ) :> obj
+            ( fun (b : V2i)        -> V4d(float b.X, float b.Y, 0.0, 1.0) ) :> obj
 
             // V2l -> other vectors
             ( fun (b : V2l)        -> V2i b ) :> obj
@@ -184,8 +184,8 @@ module PrimitiveValueConverter =
             ( fun (b : V2l)        -> V3d(float b.X, float b.Y,0.0) ) :> obj
             ( fun (b : V2l)        -> V4i(int b.X, int b.Y, 0, 0) ) :> obj
             ( fun (b : V2l)        -> V4l(b.X, b.Y, 0L, 0L) ) :> obj
-            ( fun (b : V2l)        -> V4f(float32 b.X, float32 b.Y, 0.0f, 0.0f) ) :> obj
-            ( fun (b : V2l)        -> V4d(float b.X, float b.Y, 0.0, 0.0) ) :> obj
+            ( fun (b : V2l)        -> V4f(float32 b.X, float32 b.Y, 0.0f, 1.0f) ) :> obj
+            ( fun (b : V2l)        -> V4d(float b.X, float b.Y, 0.0, 1.0) ) :> obj
 
             // V2f -> other vectors
             ( fun (b : V2f)        -> V2i b ) :> obj
@@ -198,8 +198,8 @@ module PrimitiveValueConverter =
             ( fun (b : V2f)        -> V3d(float b.X, float b.Y, 0.0) ) :> obj
             ( fun (b : V2f)        -> V4i(int b.X, int b.Y, 0, 0) ) :> obj
             ( fun (b : V2f)        -> V4l(int64 b.X, int64 b.Y, 0L, 0L) ) :> obj
-            ( fun (b : V2f)        -> V4f(b.X, b.Y, 0.0f, 0.0f) ) :> obj
-            ( fun (b : V2f)        -> V4d(float b.X, float b.Y, 0.0, 0.0) ) :> obj
+            ( fun (b : V2f)        -> V4f(b.X, b.Y, 0.0f, 1.0f) ) :> obj
+            ( fun (b : V2f)        -> V4d(float b.X, float b.Y, 0.0, 1.0) ) :> obj
 
             // V2d -> other vectors
             ( fun (b : V2d)        -> V2i b ) :> obj
@@ -212,8 +212,8 @@ module PrimitiveValueConverter =
             ( fun (b : V2d)        -> V3d(b.X, b.Y, 0.0) ) :> obj
             ( fun (b : V2d)        -> V4i(int b.X, int b.Y, 0, 0) ) :> obj
             ( fun (b : V2d)        -> V4l(int64 b.X, int64 b.Y, 0L, 0L) ) :> obj
-            ( fun (b : V2d)        -> V4f(float32 b.X, float32 b.Y, 0.0f, 0.0f) ) :> obj
-            ( fun (b : V2d)        -> V4d(b.X, b.Y, 0.0, 0.0) ) :> obj
+            ( fun (b : V2d)        -> V4f(float32 b.X, float32 b.Y, 0.0f, 1.0f) ) :> obj
+            ( fun (b : V2d)        -> V4d(b.X, b.Y, 0.0, 1.0) ) :> obj
 
         ]
 
@@ -226,8 +226,8 @@ module PrimitiveValueConverter =
             ( fun (b : V3i)        -> V3d b) :> obj
             ( fun (b : V3i)        -> V4i(b.X, b.Y, b.Z, 0)) :> obj
             ( fun (b : V3i)        -> V4l(int64 b.X, int64 b.Y, int64 b.Z, 0L)) :> obj
-            ( fun (b : V3i)        -> V4f(float32 b.X, float32 b.Y, float32 b.Z, 0.0f)) :> obj
-            ( fun (b : V3i)        -> V4d(float b.X, float b.Y, float b.Z, 0.0)) :> obj
+            ( fun (b : V3i)        -> V4f(float32 b.X, float32 b.Y, float32 b.Z, 1.0f)) :> obj
+            ( fun (b : V3i)        -> V4d(float b.X, float b.Y, float b.Z, 1.0)) :> obj
 
             // V3l -> other vectors
             ( fun (b : V3l)        -> V3i b) :> obj
@@ -236,8 +236,8 @@ module PrimitiveValueConverter =
             ( fun (b : V3l)        -> V3d b) :> obj
             ( fun (b : V3l)        -> V4i(int b.X, int b.Y, int b.Z, 0)) :> obj
             ( fun (b : V3l)        -> V4l(b.X, b.Y, b.Z, 0L)) :> obj
-            ( fun (b : V3l)        -> V4f(float32 b.X, float32 b.Y, float32 b.Z, 0.0f)) :> obj
-            ( fun (b : V3l)        -> V4d(float b.X, float b.Y, float b.Z, 0.0)) :> obj
+            ( fun (b : V3l)        -> V4f(float32 b.X, float32 b.Y, float32 b.Z, 1.0f)) :> obj
+            ( fun (b : V3l)        -> V4d(float b.X, float b.Y, float b.Z, 1.0)) :> obj
 
             // V3f -> other vectors
             ( fun (b : V3f)        -> V3i b) :> obj
@@ -246,8 +246,8 @@ module PrimitiveValueConverter =
             ( fun (b : V3f)        -> V3d b) :> obj
             ( fun (b : V3f)        -> V4i(int b.X, int b.Y, int b.Z, 0)) :> obj
             ( fun (b : V3f)        -> V4l(int64 b.X, int64 b.Y, int64 b.Z, 0L)) :> obj
-            ( fun (b : V3f)        -> V4f(b.X, b.Y, b.Z, 0.0f)) :> obj
-            ( fun (b : V3f)        -> V4d(float b.X, float b.Y, float b.Z, 0.0)) :> obj
+            ( fun (b : V3f)        -> V4f(b.X, b.Y, b.Z, 1.0f)) :> obj
+            ( fun (b : V3f)        -> V4d(float b.X, float b.Y, float b.Z, 1.0)) :> obj
 
             // V3d -> other vectors
             ( fun (b : V3d)        -> V3i b) :> obj
@@ -256,8 +256,8 @@ module PrimitiveValueConverter =
             ( fun (b : V3d)        -> b) :> obj
             ( fun (b : V3d)        -> V4i(int b.X, int b.Y, int b.Z, 0)) :> obj
             ( fun (b : V3d)        -> V4l(int64 b.X, int64 b.Y, int64 b.Z, 0L)) :> obj
-            ( fun (b : V3d)        -> V4f(float32 b.X, float32 b.Y, float32 b.Z, 0.0f)) :> obj
-            ( fun (b : V3d)        -> V4d(b.X, b.Y, b.Z, 0.0)) :> obj
+            ( fun (b : V3d)        -> V4f(float32 b.X, float32 b.Y, float32 b.Z, 1.0f)) :> obj
+            ( fun (b : V3d)        -> V4d(b.X, b.Y, b.Z, 1.0)) :> obj
 
         ]
 

@@ -159,17 +159,18 @@ type ShaderStage =
 
 
 
-type BackendSurface(code : string, entryPoints : Dictionary<ShaderStage, string>, uniforms : SymbolDict<IMod>, samplerStates : SymbolDict<SamplerStateDescription>, semanticMap : SymbolDict<Symbol>) =
+type BackendSurface(code : string, entryPoints : Dictionary<ShaderStage, string>, uniforms : SymbolDict<IMod>, samplerStates : SymbolDict<SamplerStateDescription>, semanticMap : SymbolDict<Symbol>, uniformTypes : SymbolDict<Type>) =
     interface ISurface
     member x.Code = code
     member x.EntryPoints = entryPoints
     member x.Uniforms = uniforms
     member x.SamplerStates = samplerStates
     member x.SemanticMap = semanticMap
+    member x.UniformTypes = uniformTypes
 
-    new(code, entryPoints) = BackendSurface(code, entryPoints, SymDict.empty, SymDict.empty, SymDict.empty)
-    new(code, entryPoints, uniforms) = BackendSurface(code, entryPoints, uniforms, SymDict.empty, SymDict.empty)
-    new(code, entryPoints, uniforms, samplerStates) = BackendSurface(code, entryPoints, uniforms, samplerStates, SymDict.empty)
+    new(code, entryPoints) = BackendSurface(code, entryPoints, SymDict.empty, SymDict.empty, SymDict.empty, SymDict.empty)
+    new(code, entryPoints, uniforms) = BackendSurface(code, entryPoints, uniforms, SymDict.empty, SymDict.empty, SymDict.empty)
+    new(code, entryPoints, uniforms, samplerStates) = BackendSurface(code, entryPoints, uniforms, samplerStates, SymDict.empty, SymDict.empty)
 
 type IGeneratedSurface =
     inherit ISurface

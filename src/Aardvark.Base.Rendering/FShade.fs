@@ -136,8 +136,6 @@ module FShadeInterop =
 
     type FShadeSurface(effect : FShadeEffect) =
         let mutable cache = None
-        let uniforms = SymDict.empty
-        let samplerStates = SymDict.empty
 
         static let glslConfigCache = ConcurrentDict<_,_>(Dict())
 
@@ -155,6 +153,7 @@ module FShadeInterop =
                 createPerStageUniforms = false
                 flipHandedness = false
                 depthRange = Range1d(-1.0,1.0)
+                treatUniformsAsInputs = false
             }
 
         static let mac410 = 
@@ -170,6 +169,7 @@ module FShadeInterop =
                 createPerStageUniforms = false
                 flipHandedness = false
                 depthRange = Range1d(-1.0,1.0)
+                treatUniformsAsInputs = false
             }
 
 
@@ -186,6 +186,7 @@ module FShadeInterop =
                 createPerStageUniforms = false
                 flipHandedness = false
                 depthRange = Range1d(-1.0,1.0)
+                treatUniformsAsInputs = false
             }
 
         static let vulkan =
@@ -201,6 +202,7 @@ module FShadeInterop =
                 createPerStageUniforms = true
                 flipHandedness = true
                 depthRange = Range1d(0.0,1.0)
+                treatUniformsAsInputs = false
             }
 
         static let tryGetGlslConfig (r : IRuntime) =
@@ -250,45 +252,60 @@ module FShadeInterop =
         interface IGeneratedSurface with
             member x.Generate (r : IRuntime, signature : IFramebufferSignature) =
                 match cache with
-                    | Some c -> c
+                    | Some res -> res
                     | None ->
-                        match tryGetGlslConfig r with
-                            | Some glslConfig ->
+                        let res = FShadeSurface.Compile(r, signature, effect, id)
+                        cache <- Some res
+                        res
+                  
+        static member Compile(r : IRuntime, signature : IFramebufferSignature, effect : FShadeEffect, adjustConfig : CompilerConfiguration -> CompilerConfiguration) =
+            match tryGetGlslConfig r with
+                | Some glslConfig ->
+                    let uniformTypes = SymDict.empty
+                    let uniforms = SymDict.empty
+                    let samplerStates = SymDict.empty
 
-                                let compileEffect =
-                                    GLSL.compileEffect glslConfig
+                    let compileEffect =
+                        GLSL.compileEffect (adjustConfig glslConfig)
 
-                                let needed =
-                                    signature.ColorAttachments 
-                                        |> Map.toList
-                                        |> List.map (fun (_,(s,f)) ->
-                                            match defaultSemanticTypes.TryGetValue s with
-                                                | (true, t) -> s.ToString(), t
-                                                | _ -> s.ToString(), formatToExpectedType f.format
-                                           )
-                                        |> Map.ofList
-                                match effect |> compileEffect needed with
-                                    | Success(map, code) ->
-                                        let semanticMap = SymDict.empty
+                    let needed =
+                        signature.ColorAttachments 
+                            |> Map.toList
+                            |> List.map (fun (_,(s,f)) ->
+                                match defaultSemanticTypes.TryGetValue s with
+                                    | (true, t) -> s.ToString(), t
+                                    | _ -> s.ToString(), formatToExpectedType f.format
+                                )
+                            |> Map.ofList
+                    match effect |> compileEffect needed with
+                        | Success(map, code) ->
+                            let semanticMap = SymDict.empty
 
-                                        for KeyValue(k,v) in map do
-                                            if not v.IsSamplerUniform then
-                                                uniforms.[Symbol.Create(k)] <- (v.Value |> unbox<IMod>)
-                                            else
-                                                let sem, sam = v.Value |> unbox<string * SamplerState>
-                                                semanticMap.[Sym.ofString k] <- Sym.ofString sem
-                                                samplerStates.[Sym.ofString sem] <- toSamplerStateDescription sam
-                                                ()
+                            for KeyValue(k,v) in map do
+                                
+                                if not v.IsSamplerUniform then
+                                    let sem = Symbol.Create k    
+                                    match v with
+                                        | UniformGetter(value, t) ->
+                                            uniforms.[sem] <- (value |> unbox<IMod>)
+                                            uniformTypes.[sem] <- t
+                                        | AttributeGetter(_,t) ->
+                                            uniformTypes.[sem] <- t
+                                else
+                                    let sem, sam = v.Value |> unbox<string * SamplerState>
+                                    semanticMap.[Sym.ofString k] <- Sym.ofString sem
+                                    samplerStates.[Sym.ofString sem] <- toSamplerStateDescription sam
+                                    ()
 
-                                        let bs = getOrCreateSurface code 
-                                        let result = BackendSurface(bs.Code, bs.EntryPoints, uniforms, samplerStates, semanticMap) 
-                                        cache <- Some result
-                                        result
+                            let bs = getOrCreateSurface code 
+                            let result = BackendSurface(bs.Code, bs.EntryPoints, uniforms, samplerStates, semanticMap, uniformTypes) 
+                            result
     
-                                    | Error e -> 
-                                        failwithf "could not compile shader for GLSL: %A" e
-                            | None ->
-                                failwithf "unsupported runtime type: %A" r     
+                        | Error e -> 
+                            failwithf "could not compile shader for GLSL: %A" e
+                | None ->
+                    failwithf "unsupported runtime type: %A" r     
+                  
                     
     let (!!) (m : IMod<'a>) : 'a =
         failwith "mod-splicing can only be used inside shaders"
