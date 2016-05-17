@@ -134,6 +134,11 @@
       <Project>{e3508b1c-592c-4e8e-98f3-71dbec6083da}</Project>
       <Private>True</Private>
     </ProjectReference>
+    <ProjectReference Include="..\CSharpDemo\CSharpDemo.csproj">
+      <Name>CSharpDemo</Name>
+      <Project>{e12a854a-8b0f-44f6-96dc-beeec7e65320}</Project>
+      <Private>True</Private>
+    </ProjectReference>
   </ItemGroup>
   <PropertyGroup>
     <MinimumVisualStudioVersion Condition="'$(MinimumVisualStudioVersion)' == ''">11</MinimumVisualStudioVersion>
