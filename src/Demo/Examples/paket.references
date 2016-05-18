@@ -3,3 +3,5 @@ Aardvark.Base.Runtime
 AssimpNet
 FShade
 Poly2Tri
+FsPickler
+FsPickler.Json

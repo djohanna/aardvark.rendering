@@ -17,231 +17,8 @@ open Microsoft.FSharp.NativeInterop
 #nowarn "9"
 #nowarn "51"
 
-module Persistence =
-    open System.IO
-    open System.IO.Compression
-    open Aardvark.Base.Runtime
-
-    type IBlobStore =
-        inherit IDisposable
-        abstract member Contains : string -> bool
-        abstract member Load : string -> 'a
-        abstract member Store : string * 'a -> unit
-
-    type private ArrayCoerce<'a, 'b when 'a : unmanaged and 'b : unmanaged>() =
-            
-        static let sa = sizeof<'a>
-        static let sb = sizeof<'b>
-
-//            static let lengthOffset = sizeof<nativeint> |> nativeint
-//            static let typeOffset = 2n * lengthOffset
-
-        static let idb : nativeint =
-            let gc = GCHandle.Alloc(Array.zeroCreate<'b> 1, GCHandleType.Pinned)
-            try 
-                let ptr = gc.AddrOfPinnedObject() |> NativePtr.ofNativeInt
-                NativePtr.get ptr -2
-            finally
-                gc.Free()
-
-
-        static member Coerce (a : 'a[]) : 'b[] =
-            let newLength = (a.Length * sa) / sb |> nativeint
-            let gc = GCHandle.Alloc(a, GCHandleType.Pinned)
-            try
-                let ptr = gc.AddrOfPinnedObject() |> NativePtr.ofNativeInt<nativeint>
-
-                NativePtr.set ptr -1 newLength
-                NativePtr.set ptr -2 idb
-
-                a |> unbox<'b[]>
-
-            finally
-                gc.Free()
-
-        static member CoercedApply (f : 'b[] -> 'r) (a : 'a[]) : 'r =
-            let newLength = (a.Length * sa) / sb |> nativeint
-            let gc = GCHandle.Alloc(a, GCHandleType.Pinned)
-            try
-                let ptr = gc.AddrOfPinnedObject() |> NativePtr.ofNativeInt<nativeint>
-
-                let oldLength = NativePtr.get ptr -1
-                let oldType = NativePtr.get ptr -2
-
-                NativePtr.set ptr -1 newLength
-                NativePtr.set ptr -2 idb
-
-                try
-                    a |> unbox<'b[]> |> f
-                finally
-                    NativePtr.set ptr -1 oldLength
-                    NativePtr.set ptr -2 oldType
-
-            finally
-                gc.Free()
-
-    type StreamWriter(stream : Stream) =
-        let bin = new BinaryWriter(stream)
-
-        member x.WritePrimitive (v : 'a) =
-            let mutable v = v
-            let ptr : byte[] = &&v |> NativePtr.cast |> NativePtr.toArray sizeof<'a>
-            code { return bin.Write(ptr) }
-
-        interface IWriter with
-            member x.WritePrimitive (v : 'a) = x.WritePrimitive v
-            member x.WritePrimitiveArray(data : 'a[]) =
-                code {
-                    if isNull data then
-                        do! x.WritePrimitive -1
-                    else
-                        do! x.WritePrimitive data.Length
-                        data |> ArrayCoerce<'a, byte>.CoercedApply bin.Write
-                }
-
-            member x.WriteBool(v : bool) =
-                code { return bin.Write(v) }
-
-            member x.WriteString (str : string) =
-                code { return bin.Write(str) }
-
-        interface IReader with
-            member x.ReadPrimitive() = failwith "[StreamWriter] cannot read"
-            member x.ReadPrimitiveArray() = failwith "[StreamWriter] cannot read"
-            member x.ReadBool() = failwith "[StreamWriter] cannot read"
-            member x.ReadString() = failwith "[StreamWriter] cannot read"
-
-        interface ICoder with
-            member x.IsReading = false
-
-        interface IDisposable with
-            member x.Dispose() = bin.Dispose()
-
-    type StreamReader(stream : Stream) =
-        let bin = new BinaryReader(stream)
-
-        member x.ReadPrimitive () : Code<'a> =
-            let read() : 'a =
-                let arr = bin.ReadBytes sizeof<'a>
-                let gc = GCHandle.Alloc(arr, GCHandleType.Pinned)
-                let res = gc.AddrOfPinnedObject() |> NativePtr.ofNativeInt |> NativePtr.read
-                gc.Free()
-                res
-
-            code { return read() }
-        interface IReader with
-            member x.ReadPrimitive () = x.ReadPrimitive()
-
-            member x.ReadPrimitiveArray() : Code<'a[]> =
-                code {
-                    let! length = x.ReadPrimitive()
-                    if length < 0 then
-                        return null
-                    else
-                        let data = bin.ReadBytes(sizeof<'a> * length)
-                        return ArrayCoerce<byte, 'a>.Coerce data
-                }
-
-            member x.ReadBool() =
-                code { return bin.ReadBoolean() }
-
-            member x.ReadString () =
-                code { return bin.ReadString() }
-
-        interface IWriter with
-            member x.WritePrimitive _ = failwith "[StreamReader] cannot write"
-            member x.WritePrimitiveArray _ = failwith "[StreamReader] cannot write"
-            member x.WriteBool _ = failwith "[StreamReader] cannot write"
-            member x.WriteString _ = failwith "[StreamReader] cannot write"
-
-        interface ICoder with
-            member x.IsReading = true
-
-        interface IDisposable with
-            member x.Dispose() = bin.Dispose()
-
-
-    type ZipStore(file : string) =
-        let stream = File.Open(file, FileMode.OpenOrCreate, FileAccess.ReadWrite)
-        let archive = new ZipArchive(stream, ZipArchiveMode.Update)
-        
-
-        member x.Contains (name : string) =
-            let e = archive.GetEntry name
-            not (isNull e)
-
-        member x.Store(name : string, value : 'a) =
-            let e = archive.GetEntry(name)
-            let e = 
-                if isNull e then archive.CreateEntry(name)
-                else e
-
-            use w = new StreamWriter(e.Open())
-            w.Write value
-
-        member x.Load(name : string) : 'a =
-            let e = archive.GetEntry(name)
-            if isNull e then 
-                failwithf "[ZipStore] could not get entry: %A" name
-
-            use r = new StreamReader(e.Open())
-            r.Read()
-
-        member x.Dispose() =
-            stream.Flush()
-            archive.Dispose()
-            stream.Dispose()
-
-        interface IBlobStore with
-            member x.Contains(name) = x.Contains(name)
-            member x.Load(name) = x.Load(name)
-            member x.Store(name, value) = x.Store(name, value)
-            member x.Dispose() = x.Dispose()
-
-module TreeStuff =
-
-    type Value<'a>(create : unit -> 'a) =
-        let mutable cache = None
-
-        member x.Value =
-            lock x (fun () ->
-                match cache with
-                    | Some c -> c
-                    | None -> 
-                        let c = create()
-                        cache <- Some c
-                        c
-            )
-
-        member x.Destroy() =
-            lock x (fun () ->
-                cache <- None
-            )
-
-    module Value =
-        let create (f : unit -> 'a) = Value f
-        let force (v : Value<'a>) = v.Value
-
-    type ValueBuilder() =
-        member x.Bind(v : Value<'a>, f : 'a -> Value<'b>) =
-            Value(fun () -> v.Value |> f |> Value.force)
-
-        member x.Return(v : 'a) = Value.create (fun () -> v)
-
-        member x.Delay(f : unit -> Value<'a>) = Value(fun () -> f().Value)
-    
-    let value = ValueBuilder()
-
-
-    type Point =
-        struct
-            val mutable public Position : V3f
-            val mutable public Color : C4b
-
-            new(p,c) = { Position = p; Color = c }
-        end
-
-    type Cell = CSharpDemo.Cell
+[<AutoOpen>]
+module ``Move to Base`` =
 
     [<AutoOpen>]
     module private Utils =
@@ -254,7 +31,7 @@ module TreeStuff =
             else (v + 1L) / 2L
 
 
-        let floor3d (v : V3d) =
+        let inline floor3d (v : V3d) =
             V3l(v.X |> floor |> int64, v.Y |> floor |> int64, v.Z |> floor |> int64)
 
     [<CustomEquality; NoComparison>]
@@ -300,6 +77,20 @@ module TreeStuff =
                     (shift + float x.Z + 1.0) * size    |> float
                 )
 
+            member x.Center =
+                let size = pown 2.0 x.Exp
+
+                let shift = 
+                    let ehalf = floor (float (x.Exp + 1) * 0.5) |> int
+                    let shift = -((pown 4.0 ehalf) - 1.0) / 3.0
+                    shift / size
+
+                V3d(
+                    (shift + float x.X + 0.5) * size    |> float,
+                    (shift + float x.Y + 0.5) * size    |> float,
+                    (shift + float x.Z + 0.5) * size    |> float
+                )          
+
             member x.Contains (p : V3d) =
                 x.BoundingBox.Contains p
 
@@ -310,27 +101,44 @@ module TreeStuff =
                 if x.Exp % 2 = 0 then GridCell(div2Ceil x.X, div2Ceil x.Y, div2Ceil x.Z, x.Exp + 1)
                 else GridCell(div2Floor x.X, div2Floor x.Y, div2Floor x.Z, x.Exp + 1)
 
+            member x.IndexInParent =
+                if x.Exp % 2 = 0 then 
+                    (((int x.X + 1) % 2) <<< 2) |||
+                    (((int x.Y + 1) % 2) <<< 1) |||
+                    (((int x.Z + 1) % 2) <<< 0)
+                else
+                    (((int x.X) % 2) <<< 2) |||
+                    (((int x.Y) % 2) <<< 1) |||
+                    (((int x.Z) % 2) <<< 0)
+                    
+
+
             member x.Children =
                 let e = x.Exp - 1
+                let l = if x.Exp % 2 = 0 then 0L else -1L
+                let h = if x.Exp % 2 = 0 then 1L else 0L
+
                 let z = x.Z * 2L
                 let y = x.Y * 2L
                 let x = x.X * 2L
                 [|
-                    GridCell(x,    y,    z,    e)
-                    GridCell(x,    y,    z+1L, e)
-                    GridCell(x,    y+1L, z,    e)
-                    GridCell(x,    y+1L, z+1L, e)
-                    GridCell(x+1L, y,    z,    e)
-                    GridCell(x+1L, y,    z+1L, e)
-                    GridCell(x+1L, y+1L, z,    e)
-                    GridCell(x+1L, y+1L, z+1L, e)
+                    GridCell(x+l,    y+l,    z+l,    e)
+                    GridCell(x+l,    y+l,    z+h,    e)
+                    GridCell(x+l,    y+h,    z+l,    e)
+                    GridCell(x+l,    y+h,    z+h,    e)
+                    GridCell(x+h,    y+l,    z+l,    e)
+                    GridCell(x+h,    y+l,    z+h,    e)
+                    GridCell(x+h,    y+h,    z+l,    e)
+                    GridCell(x+h,    y+h,    z+h,    e)
                 |]
 
             member x.GetChild (index : int) =
                 let xc = (index >>> 2) &&& 0x1 |> int64
                 let yc = (index >>> 1) &&& 0x1 |> int64
                 let zc = (index >>> 0) &&& 0x1 |> int64
-                GridCell(2L * x.X + xc, 2L * x.Y + yc, 2L * x.Z + zc, x.Exp - 1)
+                let l = if x.Exp % 2 = 0 then 0L else -1L
+
+                GridCell(2L * x.X + xc + l, 2L * x.Y + yc + l, 2L * x.Z + zc + l, x.Exp - 1)
 
             member x.Index = V3l(x.X, x.Y, x.Z)
 
@@ -357,228 +165,815 @@ module TreeStuff =
         let inline child (i : int) (c : GridCell) = c.GetChild i
         let inline bounds (c : GridCell) = c.BoundingBox
 
+[<AutoOpen>]
+module ``Database Stuff`` =
+    open System.IO
+    open System.IO.Compression
+    open System.Runtime.CompilerServices
+    open Nessos.FsPickler
+    open Nessos.FsPickler.Combinators
+    open Nessos.FsPickler.Json
 
-    module Check =
-        open System
+    type IBlobFile =
+        abstract member Name : string
+        abstract member HasContent : bool
+        abstract member Size : int64
+        abstract member Read : unit -> byte[]
+        abstract member Write : byte[] -> unit
+        abstract member Delete : unit -> unit
 
-        let parentContains (c : GridCell) =
-            c.Parent.BoundingBox.Contains c.BoundingBox
+    type IBlobStore =
+        inherit IDisposable
+        abstract member GetOrCreate : string -> IBlobFile
 
-        let isChildOfParent (c : GridCell) =
-            c.Parent.Children |> Array.exists (fun ci -> ci = c)
+    module BlobStore =
+        
+        type private ZipFile(archive : ZipArchive, name : string, entry : ZipArchiveEntry) =
+            let mutable entry = entry
+            
 
-        let isSelfContained (c : GridCell) =
-            let bb = c.BoundingBox
-            c = GridCell.Containing (bb.ShrunkBy(bb.SizeX * 0.01))
+            member x.Name = name
+            member x.HasContent = not (isNull entry)
+            member x.Size = if isNull entry then 0L else entry.Length
+            member x.Delete() =
+                if not (isNull entry) then
+                    entry.Delete()
+                    entry <- null
 
-        let childEnumeration (c : GridCell) =
-            c.Children |> Array.indexed |> Array.forall (fun (i,ci) -> c.GetChild(i) = ci)
+            member x.Write(data : byte[]) =
+                if not (isNull entry) then entry.Delete()
+                entry <- archive.CreateEntry(name, CompressionLevel.NoCompression)
+
+                use stream = entry.Open()
+                stream.Write(data, 0, data.Length)
+
+            member x.Read() : byte[] =
+                if isNull entry then
+                    [||]
+                else
+                    use stream = entry.Open()
+
+                    let size = stream.Length |> int
+                    let arr = Array.zeroCreate size
+                    let mutable read = 0
+                    while read < size do
+                        read <- read + stream.Read(arr, read, size - read)
+
+                    arr
+
+            interface IBlobFile with
+                member x.Name = x.Name
+                member x.HasContent = x.HasContent
+                member x.Size = x.Size
+                member x.Write(data) = x.Write(data)
+                member x.Read() = x.Read()
+                member x.Delete() = x.Delete()
+
+        type private ZipStore (file : string) =
+            let stream = File.Open(file, FileMode.OpenOrCreate, FileAccess.ReadWrite)
+            let archive = new ZipArchive(stream, ZipArchiveMode.Update)
+
+            member x.Contains (name : string) =
+                let e = archive.GetEntry name
+                not (isNull e)
+
+            member x.Read(name : string, cont : nativeptr<byte> -> int64 -> 'a) =
+                let e = archive.GetEntry name
+                use stream = e.Open()
+
+                let size = stream.Length |> int
+                let arr = Array.zeroCreate size
+                let mutable read = 0
+                while read < size do
+                    read <- read + stream.Read(arr, read, size - read)
+
+                let gc = GCHandle.Alloc(arr, GCHandleType.Pinned)
+                try cont (gc.AddrOfPinnedObject() |> NativePtr.ofNativeInt) (int64 size)
+                finally gc.Free()
+
+            member x.Write(name : string, data : nativeptr<byte>, size : int64) =
+                let e = archive.GetEntry(name)
+                if not (isNull e) then
+                    e.Delete()
+
+                let e = archive.CreateEntry name
+                use stream = e.Open()
+
+                let arr = data |> NativePtr.toArray (int size)
+                stream.Write(arr, 0, arr.Length)
+
+            member x.Get(name : string) =
+                let e = archive.GetEntry(name)
+                ZipFile(archive, name, e) :> IBlobFile
+
+            member x.Dispose() =
+                stream.Flush()
+                archive.Dispose()
+                stream.Dispose()
+
+            interface IBlobStore with
+                member x.Dispose() = x.Dispose()
+                member x.GetOrCreate(name) = x.Get(name)
+
+        let zip (file : string) =
+            new ZipStore(file) :> IBlobStore
+
+    type TypeInfo<'a> private() =
+        static let isBlittable = 
+            let t = typeof<'a>
+            if t.IsValueType then
+                try
+                    let v = Unchecked.defaultof<'a>
+                    let gc = GCHandle.Alloc(v, GCHandleType.Pinned)
+                    gc.Free()
+                    true
+                with _ ->
+                    false
+            else
+                false
+
+        static let isBlittableArray = 
+            let t = typeof<'a>
+            if t.IsArray then
+                let bb = typedefof<TypeInfo<_>>.MakeGenericType [|t.GetElementType()|]
+                bb.GetProperty("IsBlittable", System.Reflection.BindingFlags.NonPublic ||| System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.Static).GetValue(null) |> unbox<bool>
+            else
+                false
+                     
+
+        static member IsBlittable = isBlittable
+        static member IsBlittableArray = isBlittableArray
+
+    type ArrayBlitter<'a> private() =
+        static let elementType = typeof<'a>.GetElementType()
+        static let elementSize = Marshal.SizeOf elementType
+
+        static let sizeOf (v : 'a) =
+            (v |> unbox<Array>).Length * elementSize
 
 
-        let printBad (cell : GridCell) =
-            let self = cell.BoundingBox
-            let parent = cell.Parent.BoundingBox
+        static member Read(f : IBlobFile) =
+            let arr = f.Read()
+            let res = Array.CreateInstance(elementType, arr.Length / elementSize)
+            let gc = GCHandle.Alloc(res, GCHandleType.Pinned)
+            try Marshal.Copy(arr, 0, gc.AddrOfPinnedObject(), arr.Length)
+            finally gc.Free()
+            res |> unbox<'a>
 
-            printfn "cell:      %A" cell
-            printfn "parent:    %A" cell.Parent
-            printfn "children:  %A" cell.Parent.Children
-            printfn "bself:     %A" self
-            printfn "bparent:   %A" parent
+        static member Write(f : IBlobFile, value : 'a) =
+            let arr : byte[] = Array.zeroCreate (sizeOf value)
+            let gc = GCHandle.Alloc(value, GCHandleType.Pinned)
+            try Marshal.Copy(gc.AddrOfPinnedObject(), arr, 0, arr.Length)
+            finally gc.Free()
+            f.Write(arr)
+
+    [<AbstractClass; Sealed; Extension>]
+    type BlobStoreExtensions private() =
+        static let pickler = FsPickler.CreateBinarySerializer()
+       
+
+        [<Extension>]
+        static member Load<'a>(this : IBlobFile, size : byref<int64>) : 'a =
+            if TypeInfo<'a>.IsBlittableArray then
+                ArrayBlitter<'a>.Read(this)
+            else
+                let arr = this.Read() 
+                size <- arr.LongLength
+                arr |> pickler.UnPickle
+
+        [<Extension>]
+        static member Store<'a>(this : IBlobFile, value : 'a, size : byref<int64>) =
+            if TypeInfo<'a>.IsBlittableArray then
+                ArrayBlitter<'a>.Write(this, value)
+            else
+                let data = value |> pickler.Pickle
+                size <- data.LongLength
+                this.Write(data)
+
+        [<Extension>]
+        static member Load<'a>(this : IBlobFile) : 'a =
+            if TypeInfo<'a>.IsBlittableArray then
+                ArrayBlitter<'a>.Read(this)
+            else
+                let arr = this.Read() 
+                arr |> pickler.UnPickle
+
+        [<Extension>]
+        static member Store<'a>(this : IBlobFile, value : 'a) =
+            if TypeInfo<'a>.IsBlittableArray then
+                ArrayBlitter<'a>.Write(this, value)
+            else
+                let data = value |> pickler.Pickle
+                this.Write(data)
+
+    [<AutoOpen>]
+    module WeakOpt = 
+        [<AllowNullLiteral>]
+        type WeakOption<'a when 'a : not struct>(value : 'a) =
+            let value = WeakReference<'a>(value)
+
+            member x.OptionValue = 
+                match value.TryGetTarget() with
+                    | (true, v) -> Some v
+                    | _ -> None
+
+            member x.Value = 
+                match value.TryGetTarget() with
+                    | (true, v) -> v
+                    | _ -> failwith "weak got collected"
+      
+            static member WeakNone : WeakOption<'a> = null
+            static member WeakSome (v : 'a) = WeakOption(v)
+
+        [<AutoOpen>]
+        module ``WeakOption Extensions`` =
+
+            let WeakSome(v) = WeakOption(v)
+            let WeakNone<'a when 'a : not struct> : WeakOption<'a> = null
+
+            let (|WeakSome|WeakNone|) (w : WeakOption<'a>) =
+                match w with
+                    | null -> WeakNone
+                    | v ->
+                        match v.OptionValue with
+                            | Some v -> WeakSome v
+                            | None -> WeakNone
+
+    //[<AutoOpen>]
+    module StrongOpt = 
+        type WeakOption<'a> = Option<'a>
+
+        [<AutoOpen>]
+        module ``WeakOption Extensions`` =
+
+            let WeakSome(v) = Some(v)
+            let WeakNone<'a when 'a : not struct> : WeakOption<'a> = None
+
+            let (|WeakSome|WeakNone|) (w : WeakOption<'a>) =
+                match w with
+                    | None -> WeakNone
+                    | Some v -> WeakSome v
+
+    [<CustomPickler>]
+    type Database (store : IBlobStore) =
+        static let current = new ThreadLocal<ref<Option<Database>>>(fun () -> ref None)
+
+        static let withDb (db : Database) (f : unit -> 'a) =
+            let r = current.Value
+            let old = !r
+            r := Some db
+            try f()
+            finally r:= old
+        
+        let size (tup : obj * int64) = snd tup
+
+        static member Current = current.Value.Value.Value
+
+        static member CreatePickler (resolver : IPicklerResolver) : Pickler<Database> =
+            Pickler.int |> Pickler.wrap 
+                (fun _ -> Database.Current)
+                (fun db -> 0)
+    
+
+        member x.Use (f : unit -> 'a) =
+            withDb x f
+
+        member x.Ref(name : string) =
+            let file = store.GetOrCreate name
+            dref<'a>(x, file)
+
+        member x.Ref(name : string, value : 'a) =
+            let file = store.GetOrCreate name
+            file.Store(value)
+            dref<'a>(x, file, value)
+
+        member x.NewRef(value : 'a) =
+            let name = Guid.NewGuid() |> string
+            let file = store.GetOrCreate name
+            file.Store(value)
+            dref<'a>(x, file, value)
 
 
-        let test() =
-            let r = Random()
+        member x.Dispose() =
+            store.Dispose()
 
-            let randomIndex() = r.Next(1 <<< 20) - 1 <<< 19
-            let randomExp() = r.Next(32) - 16
-            let randomCell () = GridCell(randomIndex(), randomIndex(), randomIndex(), randomExp())
+        interface IDisposable with
+            member x.Dispose() = x.Dispose()
 
-            for i in 0..100000 do
-                let cell = randomCell()
-                if not (parentContains cell) then
-                    printBad cell
-                    failwith "containment"
+    and [<CustomPickler>] dref<'a when 'a : not struct> =
+        class
+            val mutable public Database : Database
+            val mutable public File : IBlobFile
+            val mutable Cache : WeakOption<'a>
 
-                if not (isChildOfParent cell) then
-                    printBad cell
-                    failwith "relation"
+            static member CreatePickler (resolver : IPicklerResolver) : Pickler<dref<'a>> =
+                Pickler.string |> Pickler.wrap 
+                    (fun str -> Database.Current.Ref(str))
+                    (fun ref -> ref.Name)
+    
 
-                if not (isSelfContained cell) then
-                    printBad cell
-                    failwith "self contained"     
-                                  
-                if not (childEnumeration cell) then
-                    printBad cell
-                    failwith "enum"    
+            member x.Name = x.File.Name
+
+            member x.Size = x.File.Size
+
+            member x.Value
+                with get() : 'a =
+                    match x.Cache with
+                        | WeakSome v -> v
+                        | _ -> 
+                            let v = x.Database.Use (fun () -> x.File.Load())
+                            x.Cache <- WeakSome v
+                            v
+
+                and set (v : 'a) =
+                    match x.Cache with
+                        | WeakSome o when Object.Equals(o, v) -> ()
+                        | _ ->
+                            x.Database.Use (fun () -> x.File.Store(v))
+                            x.Cache <- WeakSome v
+                  
+            member x.HasValue =
+                x.File.HasContent
+
+            member x.ClearCache() =
+                x.Cache <- WeakNone
+
+            member x.Delete() =
+                x.File.Delete()
+                x.Cache <- WeakNone
+
+            override x.ToString() =
+                match x.Cache with
+                    | WeakSome v -> sprintf "{ %s = %A }" x.Name v
+                    | WeakNone -> sprintf "{ %s = ? }" x.Name
+
+            internal new(db : Database, file : IBlobFile) = { Database = db; File = file; Cache = WeakNone }
+            internal new(db : Database, file : IBlobFile, value : 'a) = { Database = db; File = file; Cache = WeakSome value }
+        end
 
 
 
+
+[<AutoOpen>]
+module ``Octree impl`` =
+
+    [<AutoSerializable(false)>]
+    type Point =
+        struct
+            val mutable public Position : V3f
+            val mutable public Color : C4b
+
+
+            static member (-) (p : Point, v : V3f) = Point(p.Position - v, p.Color)
+            static member (+) (p : Point, v : V3f) = Point(p.Position + v, p.Color)
+            static member (-) (v : V3f, p : Point) = Point(p.Position - v, p.Color)
+            static member (+) (v : V3f, p : Point) = Point(p.Position + v, p.Color)
+
+
+
+            new(p,c) = { Position = p; Color = c }
+        end
+
+    [<AllowNullLiteral>]
     type Node =
-        | Empty 
-        | Leaf of int * Value<Point[]>
-        | Node of int * Value<Point[]> * Value<Node>[]
+        class
+            val mutable public Count : int
+            val mutable public Points : dref<Point[]>
+            val mutable public Children : dref<Node>[]
 
-    type Octree = { splitThreshold : int; bounds : Box3d; cell : Cell; root : Node }
 
 
+            static member Empty : Node = null
+            static member Leaf(cnt, points) = Node(cnt, points, null)
+            static member Node(cnt, points, children) = Node(cnt, points, children)
+
+
+            private new(cnt, p,c) = { Count = cnt; Points = p; Children = c }
+        end
+
+    [<AutoOpen>]
+    module ``Node Extensions`` =
+        let (|Node|Leaf|Empty|) (n : Node) =
+            if isNull n then Empty
+            elif isNull n.Children then Leaf(n.Count, n.Points)
+            else Node(n.Count, n.Points, n.Children)
+
+        let Empty = Node.Empty
+        let Leaf(cnt, points) = Node.Leaf(cnt, points)
+        let Node(cnt, points, children) = Node.Node(cnt, points, children)
+
+
+    type Octree = { db : Database; splitThreshold : int; cell : GridCell; count : int; offset : V3d; bounds : Box3d; root : dref<Node> }
 
     [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
-    module Node =
-        
-        let count (n : Node) =
-            match n with
-                | Empty -> 0
-                | Leaf(c,_) -> c
-                | Node(c,_,_) -> c
+    module private OctreeNodeImp =
 
-        let childBoxes (bounds : Box3d) =
-            let l = bounds.Min
-            let c = bounds.Center
-            let h = bounds.Max
-            [|
-                Box3d(l.X, l.Y, l.Z, c.X, c.Y, c.Z)
-                Box3d(l.X, l.Y, c.Z, c.X, c.Y, h.Z)
-                Box3d(l.X, c.Y, l.Z, c.X, h.Y, c.Z)
-                Box3d(l.X, c.Y, c.Z, c.X, h.Y, h.Z)
-                Box3d(c.X, l.Y, l.Z, h.X, c.Y, c.Z)
-                Box3d(c.X, l.Y, c.Z, h.X, c.Y, h.Z)
-                Box3d(c.X, c.Y, l.Z, h.X, h.Y, c.Z)
-                Box3d(c.X, c.Y, c.Z, h.X, h.Y, h.Z)
-            |]
+        let private cluster (cell : GridCell) (points : Point[]) =
+            let splitPoint = cell.Center
 
-        let rec build (splitThreshold : int) (box : Box3d) (points : Point[]) : Node =
+            let clustered = Array.init 8 (fun i -> System.Collections.Generic.List<Point>(points.Length / 4))
+
+            for i in 0..points.Length-1 do
+                let p = points.[i]
+                let index = 
+                    let p = p.Position
+                    (if float p.X >= splitPoint.X then 4 else 0) +
+                    (if float p.Y >= splitPoint.Y then 2 else 0) +
+                    (if float p.Z >= splitPoint.Z then 1 else 0)
+
+                clustered.[index].Add(p)
+
+            clustered |> Array.mapi (fun i c -> i, CSharpList.toArray c)
+
+        let rec build (tree : Octree) (depth : int) (cell : GridCell) (points : Point[]) : Node =
             if points.Length = 0 then
                 Empty
 
-            elif points.Length < splitThreshold then
-                Leaf(points.Length, value { return points })
+            elif points.Length < tree.splitThreshold then
+                Leaf(points.Length, tree.db.NewRef(points))
 
             else
-                let childBoxes = childBoxes box
+                if depth > 100 then
+                    Log.warn "leaf with %d points" points.Length
+                    Leaf(points.Length, tree.db.NewRef(points))
+                else
+                    let clustered = cluster cell points
+                    let children = 
+                        clustered |> Array.map (fun (i, childPoints) ->
+                            let c = cell.GetChild i
+                            tree.db.NewRef(build tree (depth + 1) c childPoints)
+                        )
+         
+                    Node(points.Length, tree.db.NewRef [||], children)
 
-                let childData = 
-                    childBoxes |> Array.map (fun b ->
-                        points |> Array.filter (fun p -> b.Contains (V3d p.Position))
-                    )
+        let rec addContained (tree : Octree) (depth : int) (cell : GridCell) (points : Point[]) (node : dref<Node>) =
+            match node.Value with
+                | Empty -> 
+                    node.Value <- build tree depth cell points
 
-                let children =
-                    Array.init 8 (fun i ->
-                        value {
-                            return build splitThreshold childBoxes.[i] childData.[i]
-                        }
-                    )
+                | Leaf(cnt, pts) ->
+                    let newCnt = cnt + points.Length
+                    let newPoints = Array.append pts.Value points
+                    if newCnt < tree.splitThreshold then
+                        pts.Value <- newPoints
+                        node.Value <- Leaf(newCnt, pts)
+                    else
+                        pts.Delete()
+                        node.Value <- build tree depth cell newPoints
 
-                Node(points.Length, value { return [||]}, children)
+                | Node(cnt, pts, children) ->
+                    let newCnt = cnt + points.Length
+                    
+                    for (i, contained) in cluster cell points do
+                        let child = children.[i]
+                        let childCell = cell |> GridCell.child i
+                        addContained tree (depth + 1) childCell contained child
 
-            
+                    node.Value <- Node(newCnt, pts, children)
+
+        let rec postProcess (tree : Octree) (node : dref<Node>) : int * Point[] =
+            match node.Value with
+                | Empty -> 
+                    0, [||]
+
+                | Leaf(cnt,pts) ->
+                    0, pts.Value
+
+                | Node(cnt,pts,children) ->
+                    let mutable maxDepth = 0
+                    let childPoints = System.Collections.Generic.List()
+                    for i in 0..children.Length-1 do
+                        let d, pts = postProcess tree children.[i]
+                        childPoints.AddRange(pts)
+                        maxDepth <- max d maxDepth
+
+                    if maxDepth = 0 && childPoints.Count <> cnt then
+                        Log.warn "unexpected node-count: { was = %A; expected = %A }" childPoints.Count cnt
+
+                    let d = maxDepth + 1
+
+                    if childPoints.Count <> 0 then
+                        if childPoints.Count > tree.splitThreshold then
+                            let percent = float tree.splitThreshold / float childPoints.Count
+                            let lodPoints = childPoints.TakeRandomly(percent) |> Seq.toArray
+                            pts.Value <- lodPoints
+                            d, lodPoints
+                        else
+                            let lodPoints = childPoints |> CSharpList.toArray
+                            pts.Value <- lodPoints
+                            d, lodPoints
+                    else
+                        Log.warn "empty inner node"
+                        d, [||]
+
+        let count (n : Node) =
+            match n with
+                | Empty -> 0
+                | n -> n.Count
 
     [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
-    module Octree =
-        
-        let count (t : Octree) =
-            t.root |> Node.count
-        
+    module private OctreeImp =
+        let empty (db : Database) (splitThreshold : int) = { db = db; splitThreshold = splitThreshold; cell = GridCell(); count = 0; offset = V3d.Zero; bounds = Box3d.Invalid; root = db.NewRef(Empty) }
+
         let isEmpty (t : Octree) =
-            match t.root with
+            match t.root.Value with
                 | Empty -> true
                 | _ -> false
 
-        let empty (splitThreshold : int) = { splitThreshold = splitThreshold; bounds = Unchecked.defaultof<Box3d>; cell = Unchecked.defaultof<Cell>; root = Empty }
+        let wrap (t : Octree) = 
+            let parentCell = t.cell.Parent
+            let orgIndex = t.cell.IndexInParent
 
+            let children = 
+                Array.init 8 (fun i -> 
+                    if i = orgIndex then t.root
+                    else t.db.NewRef(Empty)
+                )
 
-        let addContained (points : Point[]) (t : Octree) =
-            let rec add (bounds : Box3d) (points : Point[]) (n : Node) =
-                match n with
-                    | Empty -> 
-                        Node.build t.splitThreshold bounds points
+            let newRoot = Node(t.count, t.db.NewRef [||], children)
+            { t with cell = parentCell; root = t.db.NewRef(newRoot) }
 
-                    | Leaf(cnt, data) ->
-                        if cnt + points.Length < t.splitThreshold then
-                            Leaf (
-                                cnt + points.Length,
-                                value {
-                                    let! data = data
-                                    return Array.append points data
-                                }
-                            )
-                        else
-                            Node.build t.splitThreshold bounds points
+        let add (points : Point[]) (t : Octree) : Octree =
+            if points.Length = 0 then 
+                t
 
-                    | Node(cnt, data, children) ->
-                        let childBoxes = Node.childBoxes bounds
-
-                        let childData = 
-                            childBoxes |> Array.map (fun b ->
-                                points |> Array.filter (fun p -> b.Contains (V3d p.Position))
-                            )
-
-                        let newChildren =
-                            Array.map3 (fun b node d ->
-                                value {
-                                    let! node = node
-                                    return add b d node
-                                }
-                            ) childBoxes children childData
-
-                        Node(cnt + points.Length, data, newChildren)
-
-            { t with root = add t.bounds points t.root}
-
-        let add (points : Point[]) (t : Octree) =
-            if isEmpty t then
+            elif isEmpty t then
                 let bounds = Box3d(points |> Seq.map (fun p -> V3d p.Position))
-                let cell = Cell(bounds)
-                { t with bounds = bounds; cell = cell; root = Node.build t.splitThreshold cell.BoundingBox points }
+                let cell = GridCell.ofBox bounds
+                let root = OctreeNodeImp.build t 0 cell points
+                t.root.Value <- root
+                { t with bounds = bounds; count = points.Length }
 
             else
-                let inside, outside = points |> Array.partition (fun p -> t.bounds.Contains (V3d p.Position))
-                let t = addContained inside t
+                
+                let rootBounds = t.cell |> GridCell.bounds
+                let inside, outside = points |> Array.partition (fun p -> rootBounds.Contains (V3d p.Position))
 
-                if outside.Length = 0 then
-                    t
+                let t = 
+                    if inside.Length > 0 then
+                        OctreeNodeImp.addContained t 0 t.cell inside t.root
+                        { t with count = t.count + inside.Length}
+                    else 
+                        t
+                let t = 
+                    if outside.Length <> 0 then
+                        let outsideBounds = Box3d (outside |> Seq.map (fun p -> V3d p.Position))
+                        let newBounds = t.bounds.Union(outsideBounds)
+
+                        let allInside(t : Octree) = 
+                            let bb = t.cell |> GridCell.bounds
+                            bb.Contains(outsideBounds)
+
+                        let mutable res = wrap t
+                        while not (allInside res) do
+                            res <- wrap res
+
+                        OctreeNodeImp.addContained res 0 res.cell outside res.root
+                        { res with bounds = newBounds; count = res.count + outside.Length }
+                    else
+                        t
+
+                if t.count <> t.root.Value.Count then
+                    Log.warn "out of sync"
+
+                t
+
+        let postProcess (offset : V3d) (t : Octree) =
+            OctreeNodeImp.postProcess t t.root |> ignore
+
+            { t with offset = offset }
+
+
+    [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
+    module Octree =
+        open System.IO
+
+        let build (db : Database) (splitThreshold : int) (offset : V3d) (pointCount : int) (points : seq<Point>) =
+            let mutable tree = OctreeImp.empty db splitThreshold
+
+            let chunkSize = 1048576
+            let mutable buffer = Array.zeroCreate chunkSize
+
+            let mutable pointsProcessed = 0
+
+            Log.startTimed "build"
+            let e = points.GetEnumerator()
+            while e.MoveNext() do
+                let mutable cnt = 0
+                buffer.[cnt] <- e.Current
+                cnt <- cnt + 1
+                while cnt < chunkSize && e.MoveNext() do
+                    buffer.[cnt] <- e.Current
+                    cnt <- cnt + 1
+
+                if cnt <> chunkSize then
+                    Array.Resize(&buffer, cnt)
+
+                pointsProcessed <- pointsProcessed + cnt
+                tree <- OctreeImp.add buffer tree
+                Log.line "progress: %.3f%%" (100.0 * float pointsProcessed / float pointCount)
+
+            e.Dispose()
+            Log.stop()
+
+            OctreeImp.postProcess offset tree
+
+
+
+    module Pts = 
+        open System.IO
+
+        let exps =
+            Array.init 64 (fun i ->
+                pown 10.0 (-i)
+            )
+
+        let rec private trimWs (str : string, start : byref<int>) =
+            if start < str.Length then 
+                let c = str.[start]
+                if c = ' ' || c = '\t' then
+                    start <- start + 1
+                    trimWs(str, &start)
+
+        let rec private trimToFirst (str : string, search : char, start : byref<int>) =
+            if start < str.Length then 
+                let c = str.[start]
+                if c = ' ' || c = '\t' then
+                    start <- start + 1
+                    trimToFirst(str, search, &start)
+                elif c = search then
+                    start <- start + 1
+                    true
                 else
-                    let bounds = Box3d(points |> Seq.map (fun p -> V3d p.Position))
+                    false
+            else
+                false
 
-                    let root = t.root
-                    let cnt = Node.count root
+        let rec private readIntAcc (str : string, current : int, pos : bool, start : byref<int>) =
+            if start < str.Length then
+                let c = str.[start]
+                start <- start + 1
 
-                    let rec createNode (cell : Cell) =
-                        if cell = t.cell then
-                            t.root
+                if c = '+' then 
+                    readIntAcc (str, current, pos, &start)
+                elif c = '-' then
+                    readIntAcc (str, current, false, &start)
+                else
+                    let i = int c - 48
+                    if i >= 0 && i < 10 then
+                        readIntAcc (str, 10 * current + i, pos, &start)
+                    else
+                        start <- start - 1
+                        if pos then current
+                        else -current
+            else
+                if pos then current
+                else -current
 
-                        elif cell.Contains t.cell then
-                            let children = t.cell.Children
-                            Node(
-                                cnt,
-                                value { return [||] },
-                                Array.init 8 (fun i ->
-                                    value { return createNode children.[i] }
-                                )
-                            )
+        let private readInt (str : string, start : byref<int>) =
+            trimWs(str, &start)
+            readIntAcc(str, 0, true, &start)
 
-                        else
-                            Empty
+        let private readDouble (str : string, start : byref<int>) =
 
-                    let newCell = Cell(bounds.Union t.cell.BoundingBox)
-                    let newRoot = createNode newCell
+            let real = readInt(str, &start)
 
-                    addContained outside { 
-                        t with 
-                            cell = newCell
-                            bounds = bounds.Union t.bounds
-                            root = newRoot 
-                        }
+            let s = start
+            let worked = trimToFirst(str, '.', &start)
+            if worked then 
+                trimWs(str, &start)
+                let s = start
+                let frac = readInt(str, &start)
+            
+                let exp = start - s
 
-                        
+                if frac = 0 then float real
+                elif real > 0 then float real + float frac * exps.[exp]
+                elif real < 0 then float real - float frac * exps.[exp]
+                else float frac * exps.[exp]
+            else 
+                start <- s
+                float real
+
+        let inline private tryReadPoint (offset : V3d, str : string) =
+            let mutable start = 0
+            let x = readDouble(str, &start)
+            let y = readDouble(str, &start)
+            let z = readDouble(str, &start)
+            readInt(str, &start) |> ignore
+            let r = readInt(str, &start) |> byte
+            let g = readInt(str, &start) |> byte
+            let b = readInt(str, &start) |> byte
+            let point = Point(V3f(x - offset.X,y - offset.Y,z - offset.Z), C4b(r,g,b,255uy))
+            Some point
+
+        let inline private readOffset (str : string) =
+            let mutable start = 0
+            let x = readDouble(str, &start)
+            let y = readDouble(str, &start)
+            let z = readDouble(str, &start)
+            V3d(x,y,z)
+
+
+        let read (file : string) =
+            let stream = File.OpenRead(file)
+            let reader = new StreamReader(stream)
+            let cnt = reader.ReadLine().Trim() |> Int32.Parse
+            if cnt > 0 then
+                let line = reader.ReadLine()
+                let off = readOffset line
+                let points = 
+                    seq {
+                        try
+                            match tryReadPoint(off, line) with
+                                | Some p -> yield p
+                                | None -> ()
+
+                            for i in 2..cnt do
+                                let line = reader.ReadLine()
+                                match tryReadPoint(off, line) with
+                                    | Some p -> yield p
+                                    | None -> ()
+                        finally
+                            reader.Dispose()
+                            stream.Dispose()
+                    }
+                off, cnt, points
+            else
+                V3d.Zero, 0, Seq.empty
+
+        let storeRandom (size : int) (file : string) =
+            let rand = Random()
+
+            use stream = File.OpenWrite(file)
+            use writer = new StreamWriter(stream)
+
+            let cnt = size * size * size
+            writer.WriteLine(string cnt)
+            let builder = System.Text.StringBuilder()
+
+
+            let sem = new SemaphoreSlim(0)
+            let mutable remaining = cnt
+            
+            let queued = new SemaphoreSlim(65536)
+
+            let points = System.Collections.Concurrent.ConcurrentBag<int * string>()
+
+            let finished = new SemaphoreSlim(0)
+            let producer =
+                async {
+                    do! Async.SwitchToNewThread()
+                    let mutable run = true
+                    while run do
+                        queued.Wait()
+                        let mutable created = 0
+                        let builder = System.Text.StringBuilder()
+                        while run && created < 65536 do
+                            let id = Interlocked.Decrement(&remaining)
+                            if id >= 0 then
+                                let x = id / (size * size)
+                                let id = id % (size * size)
+                                let y = id / size
+                                let id = id % size
+                                let z = id
+
+                                let r = rand.Next(256) |> byte
+                                let g = rand.Next(256) |> byte
+                                let b = rand.Next(256) |> byte
+                    
+                                builder.AppendFormat("{0:0.00000000} {1:0.00000000} {2:0.00000000} 0 {3} {4} {5}\r\n", x, y, z, r, g, b) |> ignore                            
+                                created <- created + 1
+                            else
+                                run <- false
+
+                        points.Add (created, builder.ToString())
+                        sem.Release() |> ignore
+
+                    finished.Release() |> ignore
+                }
+
+            let threads = 12
+            for i in 1..threads do
+                Async.Start producer
             
 
+            let mutable i = 0
+            while i < cnt do
+                sem.Wait()
+                match points.TryTake() with
+                    | (true, (c, str)) -> 
+                        queued.Release() |> ignore
+                        writer.Write(str)
+                        Log.line "wrote %.2f%%" (100.0 * float i / float cnt)
+                        i <- i + c
+                    | _ -> ()
 
 
 
 
 
-
-
+    // @"D:\Sonstiges\Laserscan-P20_Beiglboeck-2015.pts"
 
 
 
@@ -587,28 +982,42 @@ module TreeStuff =
 
 let run() =
     Aardvark.Init()
-        
-    Console.CancelKeyPress.Add(fun e ->
-        File.writeAllText @"C:\Users\schorsch\Desktop\sepp.txt" "hi sepp"
-    )
+//    Pts.storeRandom 1024 @"E:\random.pts"
+//    Environment.Exit 0
 
-    AppDomain.CurrentDomain.ProcessExit.AddHandler(EventHandler(fun s e ->
-        File.writeAllText @"C:\Users\schorsch\Desktop\sepp.txt" "hi sepp"
-    ))
+    let db = new Database(BlobStore.zip @"E:\store.zip")
 
-    printfn "done"
+    let top = db.Ref("tree")
 
-    let store = new Persistence.ZipStore(@"C:\Users\schorsch\Desktop\test.zip")
+    if not top.HasValue then
+        let offset, cnt, pts = Pts.read @"E:\random.pts"
+        let tree = Octree.build db 5000 offset cnt pts
+        top.Value <- tree
 
-    if not (store.Contains "a") then
-        printfn "store"
-        store.Store("a", 10)
-  
-    printfn "load"
-    let res : int = store.Load("a")
-    printfn "a = %A" res
-    store.Dispose()
+    let tree = top.Value
+    printfn "tree: %A" tree
+    printfn "root: %A" tree.root.Value.Count
+    db.Dispose()
+
+    //System.IO.File.Delete @"C:\Users\Schorsch\Desktop\data.zip"
     Environment.Exit 0
+
+//    let db = new Database(BlobStore.zip @"C:\Users\schorsch\Desktop\test.zip")
+//
+//
+//
+//    let ref = db.Ref("a")
+//
+//    if not ref.HasValue then
+//        printfn "create"
+//        let tree = Node(db.NewRef(Leaf 1), 2, db.NewRef(Leaf 3))
+//        ref.Value <- tree
+//
+//    printfn "ref = %A" ref.Value
+//
+//
+//    db.Dispose()
+//    Environment.Exit 0
 
     let app = new OpenGlApplication()
     let win = app.CreateSimpleRenderWindow()
