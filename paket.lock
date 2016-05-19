@@ -55,6 +55,11 @@ NUGET
     FsUnit (2.1)
       FSharp.Core (>= 3.1.2.5)
       NUnit (3.2)
+    Microsoft.Bcl (1.1.10) - framework: net40
+      Microsoft.Bcl.Build (>= 1.0.14)
+    Microsoft.Bcl.Async (1.0.168) - framework: net40
+      Microsoft.Bcl (>= 1.1.8)
+    Microsoft.Bcl.Build (1.0.21) - import_targets: false, framework: net40
     Newtonsoft.Json (8.0.3)
     NUnit (3.2)
     NUnit.Console (3.2.1)
@@ -70,12 +75,16 @@ NUGET
     NUnit.Extension.VSProjectLoader (3.2.1)
     OpenHardwareMonitor (0.7.1)
     Poly2Tri (1.0.1)
+    Redis-64 (3.0.501)
     Rx-Core (2.2.5)
       Rx-Interfaces (>= 2.2.5)
     Rx-Interfaces (2.2.5)
     Rx-Linq (2.2.5)
       Rx-Core (>= 2.2.5)
       Rx-Interfaces (>= 2.2.5)
+    StackExchange.Redis (1.1.603)
+      Microsoft.Bcl (>= 1.1.10) - framework: net40
+      Microsoft.Bcl.Async (>= 1.0.168) - framework: net40
     System.Collections (4.0.10) - framework: dnxcore50
       System.Diagnostics.Debug (>= 4.0) - framework: dnxcore50
       System.Resources.ResourceManager (>= 4.0) - framework: dnxcore50
