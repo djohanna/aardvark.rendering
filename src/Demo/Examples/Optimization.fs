@@ -184,10 +184,12 @@ module ``Database Stuff`` =
 
     type IBlobStore =
         inherit IDisposable
+        abstract member Create : string -> IBlobFile
         abstract member GetOrCreate : string -> IBlobFile
 
     module BlobStore =
-        
+        open System.Collections.Concurrent
+
         type private ZipFile(archive : ZipArchive, name : string, entry : ZipArchiveEntry) =
             let mutable entry = entry
             
@@ -233,38 +235,12 @@ module ``Database Stuff`` =
             let stream = File.Open(file, FileMode.OpenOrCreate, FileAccess.ReadWrite)
             let archive = new ZipArchive(stream, ZipArchiveMode.Update)
 
-            member x.Contains (name : string) =
-                let e = archive.GetEntry name
-                not (isNull e)
-
-            member x.Read(name : string, cont : nativeptr<byte> -> int64 -> 'a) =
-                let e = archive.GetEntry name
-                use stream = e.Open()
-
-                let size = stream.Length |> int
-                let arr = Array.zeroCreate size
-                let mutable read = 0
-                while read < size do
-                    read <- read + stream.Read(arr, read, size - read)
-
-                let gc = GCHandle.Alloc(arr, GCHandleType.Pinned)
-                try cont (gc.AddrOfPinnedObject() |> NativePtr.ofNativeInt) (int64 size)
-                finally gc.Free()
-
-            member x.Write(name : string, data : nativeptr<byte>, size : int64) =
-                let e = archive.GetEntry(name)
-                if not (isNull e) then
-                    e.Delete()
-
-                let e = archive.CreateEntry name
-                use stream = e.Open()
-
-                let arr = data |> NativePtr.toArray (int size)
-                stream.Write(arr, 0, arr.Length)
-
-            member x.Get(name : string) =
+            member x.GetOrCreate(name : string) =
                 let e = archive.GetEntry(name)
                 ZipFile(archive, name, e) :> IBlobFile
+
+            member x.Create(name : string) =
+                ZipFile(archive, name, null) :> IBlobFile
 
             member x.Dispose() =
                 stream.Flush()
@@ -273,10 +249,183 @@ module ``Database Stuff`` =
 
             interface IBlobStore with
                 member x.Dispose() = x.Dispose()
-                member x.GetOrCreate(name) = x.Get(name)
+                member x.Create(name) = x.Create(name)
+                member x.GetOrCreate(name) = x.GetOrCreate(name)
+
+
+        type private File(path : string, name : string) =
+            let f = new System.IO.FileInfo(path)
+
+
+            member x.Name = name
+            member x.HasContent = f.Exists
+            member x.Size = f.Length
+            member x.Delete() = if f.Exists then f.Delete()
+            member x.Write(data : byte[]) =
+                use stream = f.OpenWrite()
+                stream.Write(data, 0, data.Length)
+
+            member x.Read() : byte[] =
+                if not f.Exists then
+                    [||]
+                else
+                    use stream = f.OpenRead()
+                    let size = stream.Length |> int
+                    let arr = Array.zeroCreate size
+                    let mutable read = 0
+                    while read < size do
+                        read <- read + stream.Read(arr, read, size - read)
+
+                    arr
+
+            interface IBlobFile with
+                member x.Name = x.Name
+                member x.HasContent = x.HasContent
+                member x.Size = x.Size
+                member x.Write(data) = x.Write(data)
+                member x.Read() = x.Read()
+                member x.Delete() = x.Delete()
+
+        type private FolderStore (folder : string) =
+            let folder = Path.GetFullPath folder
+            do if not (Directory.Exists folder) then Directory.CreateDirectory(folder) |> ignore
+
+
+            member x.GetOrCreate(name : string) =
+                let path = Path.Combine(folder, name)
+                File(path, name) :> IBlobFile
+
+            member x.Create(name : string) =
+                let path = Path.Combine(folder, name)
+                File(path, name) :> IBlobFile
+
+            interface IBlobStore with
+                member x.Dispose() = ()
+                member x.Create(name) = x.Create(name)
+                member x.GetOrCreate(name) = x.GetOrCreate(name)
+
+        
+        type private BufferedFile(mark : BufferedFile -> unit, file : IBlobFile, name : string) =
+            let mutable content =
+                if file.HasContent then Some (file.Read())
+                else None
+
+            let mutable dirty = false
+
+            member x.Name = name
+            member x.HasContent = Option.isSome content
+            member x.Size =
+                match content with
+                    | Some c -> c.LongLength
+                    | None -> 0L
+
+            member x.Read() =
+                match content with
+                    | Some content -> content
+                    | None -> [||]
+
+
+            member x.Delete() =
+                match content with
+                    | Some _ -> 
+                        content <- None
+                        dirty <- true
+                        mark x
+                    | None -> ()
+
+            member x.Write(data : byte[]) =
+                content <- Some data
+                dirty <- true
+                mark x
+
+            member x.Persist() =
+                if dirty then
+                    match content with
+                        | Some c -> file.Write c
+                        | None -> file.Delete()
+                    dirty <- false
+
+            override x.GetHashCode() = name.GetHashCode()
+            override x.Equals o =
+                match o with
+                    | :? BufferedFile as o -> name = o.Name
+                    | _ -> false
+
+            interface IBlobFile with
+                member x.Name = x.Name
+                member x.HasContent = x.HasContent
+                member x.Size = x.Size
+                member x.Write(data) = x.Write(data)
+                member x.Read() = x.Read()
+                member x.Delete() = x.Delete()
+
+        type BufferedStore(store : IBlobStore) =
+            
+            let toPersist = ConcurrentHashQueue<BufferedFile>()
+            let persistCount = new SemaphoreSlim(0)
+
+            let mark (f : BufferedFile) =
+                if toPersist.Enqueue(f) then
+                    persistCount.Release() |> ignore
+
+            let persistor =
+                async {
+                    let! ct = Async.CancellationToken
+                    do! Async.SwitchToNewThread()
+                    while true do
+                        persistCount.Wait(ct)
+                        match toPersist.TryDequeue() with
+                            | (true, f) -> f.Persist()
+                            | _ -> ()
+                }
+
+            let cts = new CancellationTokenSource()
+            let persist = Async.StartAsTask(persistor, cancellationToken = cts.Token)
+
+
+            member x.GetOrCreate(name : string) =
+                let file = store.GetOrCreate(name)
+                new BufferedFile(mark, file, name) :> IBlobFile
+
+
+            member x.Create(name : string) =
+                let file = store.Create(name)
+                new BufferedFile(mark, file, name) :> IBlobFile
+
+
+            member x.Dispose() =
+                cts.Cancel()
+                persist.Wait()
+
+                while toPersist.Count > 0 do
+                    match toPersist.TryDequeue() with
+                        | (true, f) -> f.Persist()
+                        | _ -> ()
+
+                cts.Dispose()
+                persistCount.Dispose()
+                store.Dispose()
+
+            interface IBlobStore with
+                member x.Dispose() = x.Dispose()
+                member x.Create(name) = x.Create(name)
+                member x.GetOrCreate(name) = x.GetOrCreate(name)
+
+
+        let buffered (store : IBlobStore) =
+            match store with
+                | :? BufferedStore -> store
+                | _ -> new BufferedStore(store) :> IBlobStore
 
         let zip (file : string) =
             new ZipStore(file) :> IBlobStore
+
+        let folder (folder : string) =
+            new FolderStore(folder) :> IBlobStore
+
+        let temp () =
+            new FolderStore(Path.Combine(Path.GetTempPath(), Guid.NewGuid() |> string)) :> IBlobStore
+
 
     type TypeInfo<'a> private() =
         static let isBlittable = 
@@ -449,7 +598,7 @@ module ``Database Stuff`` =
 
         member x.NewRef(value : 'a) =
             let name = Guid.NewGuid() |> string
-            let file = store.GetOrCreate name
+            let file = store.Create name
             file.Store(value)
             dref<'a>(x, file, value)
 
@@ -568,6 +717,11 @@ module ``Octree impl`` =
     [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
     module private OctreeNodeImp =
 
+        let count (n : Node) =
+            match n with
+                | Empty -> 0
+                | n -> n.Count
+
         let private cluster (cell : GridCell) (points : Point[]) =
             let splitPoint = cell.Center
 
@@ -593,7 +747,7 @@ module ``Octree impl`` =
                 Leaf(points.Length, tree.db.NewRef(points))
 
             else
-                if depth > 100 then
+                if depth > 50 then
                     Log.warn "leaf with %d points" points.Length
                     Leaf(points.Length, tree.db.NewRef(points))
                 else
@@ -631,6 +785,41 @@ module ``Octree impl`` =
 
                     node.Value <- Node(newCnt, pts, children)
 
+        let rec mergeWith (tree : Octree) (depth : int) (cell : GridCell) (newTree : dref<Node>) (node : dref<Node>) =
+            match node.Value with
+                | Empty ->
+                    node.Value <- newTree.Value
+                    newTree.Delete()
+
+                | Leaf(cnt, points) ->
+                    node.Value <- newTree.Value
+                    newTree.Delete()
+                    addContained tree depth cell points.Value node
+
+                | Node(oldCount, pts, oldChildren) ->
+                    match newTree.Value with
+                        | Empty ->
+                            newTree.Delete()
+
+                        | Leaf(c, pts) ->
+                            newTree.Delete()
+                            let points = pts.Value
+                            pts.Delete()
+                            addContained tree depth cell pts.Value node
+
+                        | Node(newCount, newPts, newChildren) ->
+                            newPts.Delete()
+                            newTree.Delete()
+
+                            for i in 0..7 do
+                                let oldChild = oldChildren.[i]
+                                let newChild = newChildren.[i]
+                                let cell = cell.GetChild i
+                                mergeWith tree (depth + 1) cell newChild oldChild 
+
+                            node.Value <- Node(oldCount + newCount, pts, oldChildren)
+
+
         let rec postProcess (tree : Octree) (node : dref<Node>) : int * Point[] =
             match node.Value with
                 | Empty -> 
@@ -666,10 +855,6 @@ module ``Octree impl`` =
                         Log.warn "empty inner node"
                         d, [||]
 
-        let count (n : Node) =
-            match n with
-                | Empty -> 0
-                | n -> n.Count
 
     [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
     module private OctreeImp =
@@ -702,7 +887,7 @@ module ``Octree impl`` =
                 let cell = GridCell.ofBox bounds
                 let root = OctreeNodeImp.build t 0 cell points
                 t.root.Value <- root
-                { t with bounds = bounds; count = points.Length }
+                { t with bounds = bounds; count = points.Length; cell = cell }
 
             else
                 
@@ -738,6 +923,21 @@ module ``Octree impl`` =
 
                 t
 
+        let mergeWith (other : Octree) (self : Octree) : Octree =
+            let mutable smaller, greater = 
+                if other.cell.Exp < self.cell.Exp then other, self
+                else self, other
+
+            while smaller.cell.Exp < greater.cell.Exp do
+                smaller <- wrap smaller
+
+            while smaller.cell <> greater.cell do
+                smaller <- wrap smaller
+                greater <- wrap greater
+
+            OctreeNodeImp.mergeWith self 0 greater.cell smaller.root greater.root
+            { greater with bounds = Box3d.Union(smaller.bounds, greater.bounds); count = smaller.count + greater.count }
+
         let postProcess (offset : V3d) (t : Octree) =
             OctreeNodeImp.postProcess t t.root |> ignore
 
@@ -747,8 +947,131 @@ module ``Octree impl`` =
     [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
     module Octree =
         open System.IO
+        open System.Collections.Concurrent
+        open System.Diagnostics
 
         let build (db : Database) (splitThreshold : int) (offset : V3d) (pointCount : int) (points : seq<Point>) =
+
+            let maxInMemoryChunks = 16
+            let chunkSize = 1 <<< 20
+            
+            let chunks = ConcurrentBag<int * Point[]>()
+            let trees = ConcurrentBag<Octree>()
+            use freeChunks = new SemaphoreSlim(maxInMemoryChunks)
+
+
+            let totalChunks = ceil (float pointCount / float chunkSize) |> int
+            let totalMerges = totalChunks - 1
+
+            let mutable parsedPoints = 0
+            let mutable parsedChunks = 0
+            let mutable processedChunks = 0
+            let mutable merged = 0
+
+            let reporter =
+                async {
+                    do! Async.SwitchToNewThread()
+                    while true do
+                        do! Async.Sleep(500)
+                        Log.line "parser:   %.2f%%" (100.0 * float parsedPoints / float pointCount)
+                        Log.line "building: %.2f%%" (100.0 * float processedChunks / float totalChunks)
+                        Log.line "merge:    %.2f%%" (100.0 * float merged / float totalMerges)
+                }
+
+
+            let parser =
+                async {
+                    let sw = Stopwatch()
+
+                    do! Async.SwitchToNewThread()
+                    sw.Start()
+
+                    for chunk in Seq.chunkBySize chunkSize points do
+                        parsedPoints <- parsedPoints + chunk.Length
+                        sw.Stop()
+                        let! _ = freeChunks.WaitAsync() |> Async.AwaitIAsyncResult
+                        sw.Start()
+                        chunks.Add(parsedChunks, chunk)
+                        parsedChunks <- parsedChunks + 1
+
+                    sw.Stop()
+
+                    return sw.Elapsed
+                }
+
+            let smallTreeBuilder =
+                async {
+                    do! Async.SwitchToNewThread()
+                    let sw = Stopwatch()
+                    sw.Start()
+                    while processedChunks < totalChunks do
+                        match chunks.TryTake() with
+                            | (true, (i,chunk)) ->
+                                let mutable tree = OctreeImp.empty db splitThreshold
+                                tree <- OctreeImp.add chunk tree
+                                trees.Add(tree)
+
+
+                                freeChunks.Release() |> ignore
+                                Interlocked.Increment(&processedChunks) |> ignore
+                            | _ ->
+                                ()
+                    sw.Stop()
+                    return sw.Elapsed
+                }
+            
+            let merger =
+                async {
+                    do! Async.SwitchToNewThread()
+                    let sw = Stopwatch()
+                    sw.Start()
+                    while merged < totalMerges do
+                        match trees.TryTake(), trees.TryTake() with
+                            | (true, l), (true, r) ->
+                                let res = OctreeImp.mergeWith l r
+                                trees.Add res
+                                Interlocked.Increment(&merged) |> ignore
+
+                            | (true, t), _ | _, (true, t) ->
+                                trees.Add t
+
+                            | _ ->
+                                ()
+                    sw.Stop()
+                    return sw.Elapsed
+                }
+
+
+            use cts = new CancellationTokenSource()
+            Async.Start(reporter, cancellationToken = cts.Token)
+
+            let sw = Stopwatch()
+            sw.Start()
+            
+            let threads = Environment.ProcessorCount / 2 |> max 2
+            let parser = Async.StartAsTask parser
+            let smallTreeBuilders = Array.init (threads - 1) (fun _ -> Async.StartAsTask smallTreeBuilder)
+            let mergers = Array.init threads (fun _ -> Async.StartAsTask merger)
+            
+
+            let parseTime = parser.Result.TotalSeconds
+            let buildTime = smallTreeBuilders |> Array.sumBy (fun t -> t.Result.TotalSeconds)
+            let mergeTime = mergers |> Array.sumBy (fun t -> t.Result.TotalSeconds)
+            sw.Stop()
+
+            Log.line "wallclock:     %.3fs" sw.Elapsed.TotalSeconds
+            Log.line "parsing took:  %.3fs" parseTime
+            Log.line "building took: %.3fs" buildTime
+            Log.line "merging took:  %.3fs" mergeTime
+            
+            Log.line "remaining: %A" trees.Count
+            match trees.TryTake() with
+                | (true, v) -> Log.line "tree: %A" v
+                | _ -> Log.warn "no tree"
+
+            cts.Cancel()
+            Environment.Exit 0
+
             let mutable tree = OctreeImp.empty db splitThreshold
 
             let chunkSize = 1048576
@@ -969,8 +1292,68 @@ module ``Octree impl`` =
                         i <- i + c
                     | _ -> ()
 
+        let createGrid (size : int) =
+            let rand = Random()
 
+            let cnt = size * size * size
+            let sem = new SemaphoreSlim(0)
+            let mutable remaining = cnt
+            
+            let queued = new SemaphoreSlim(65536)
 
+            let points = System.Collections.Concurrent.ConcurrentBag<System.Collections.Generic.List<Point>>()
+
+            let finished = new SemaphoreSlim(0)
+            let producer =
+                async {
+                    do! Async.SwitchToNewThread()
+                    let mutable run = true
+                    while run do
+                        queued.Wait()
+                        let mutable created = 0
+                        let builder = System.Collections.Generic.List<Point>()
+                        while run && created < 65536 do
+                            let id = Interlocked.Decrement(&remaining)
+                            if id >= 0 then
+                                let x = id / (size * size)
+                                let id = id % (size * size)
+                                let y = id / size
+                                let id = id % size
+                                let z = id
+
+                                let r = rand.Next(256) |> byte
+                                let g = rand.Next(256) |> byte
+                                let b = rand.Next(256) |> byte
+                    
+                                builder.Add(Point(V3f(x,y,z), C4b(r,g,b,255uy)))
+                                //builder.AppendFormat("{0:0.00000000} {1:0.00000000} {2:0.00000000} 0 {3} {4} {5}\r\n", x, y, z, r, g, b) |> ignore                            
+                                created <- created + 1
+                            else
+                                run <- false
+
+                        points.Add (builder)
+                        sem.Release() |> ignore
+
+                    finished.Release() |> ignore
+                }
+
+            let threads = 12
+            for i in 1..threads do
+                Async.Start producer
+            
+            let points = 
+                seq {
+                    let mutable i = 0
+                    while i < cnt do
+                        sem.Wait()
+                        match points.TryTake() with
+                            | (true, (pts)) -> 
+                                yield! pts
+                                i <- i + pts.Count
+                            | _ -> ()
+                }
+
+            V3d.Zero, cnt, points
 
 
     // @"D:\Sonstiges\Laserscan-P20_Beiglboeck-2015.pts"
@@ -985,12 +1368,12 @@ let run() =
 //    Pts.storeRandom 1024 @"E:\random.pts"
 //    Environment.Exit 0
 
-    let db = new Database(BlobStore.zip @"E:\store.zip")
+    let db = new Database(BlobStore.zip @"E:\store.zip" |> BlobStore.buffered)
 
     let top = db.Ref("tree")
 
     if not top.HasValue then
-        let offset, cnt, pts = Pts.read @"E:\random.pts"
+        let offset, cnt, pts = Pts.read @"E:\random.pts" //@"D:\Sonstiges\Laserscan-P20_Beiglboeck-2015.pts"
         let tree = Octree.build db 5000 offset cnt pts
         top.Value <- tree
 
