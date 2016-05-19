@@ -342,7 +342,7 @@ module ``Database Stuff`` =
                 if dirty then
                     match content with
                         | Some c -> file.Write c
-                        | None -> file.Delete()
+                        | None -> if file.HasContent then file.Delete()
                     dirty <- false
 
             override x.GetHashCode() = name.GetHashCode()
@@ -362,21 +362,29 @@ module ``Database Stuff`` =
         type BufferedStore(store : IBlobStore) =
             
             let toPersist = ConcurrentHashQueue<BufferedFile>()
-            let persistCount = new SemaphoreSlim(0)
+            let mutable count = 0
+            //let persistCount = new SemaphoreSlim(0)
 
             let mark (f : BufferedFile) =
                 if toPersist.Enqueue(f) then
-                    persistCount.Release() |> ignore
+                    Interlocked.Increment(&count) |> ignore
+                    //persistCount.Release() |> ignore
 
             let persistor =
                 async {
                     let! ct = Async.CancellationToken
                     do! Async.SwitchToNewThread()
                     while true do
-                        persistCount.Wait(ct)
-                        match toPersist.TryDequeue() with
-                            | (true, f) -> f.Persist()
-                            | _ -> ()
+                        do! Async.Sleep 500
+
+                        do while toPersist.Count > 65536 do
+                                match toPersist.TryDequeue() with
+                                    | (true, f) -> 
+                                        f.Persist()
+                                        Interlocked.Decrement(&count) |> ignore
+                                    | _ -> ()
+
+                        
                 }
 
             let cts = new CancellationTokenSource()
@@ -403,7 +411,7 @@ module ``Database Stuff`` =
                         | _ -> ()
 
                 cts.Dispose()
-                persistCount.Dispose()
+                //persistCount.Dispose()
                 store.Dispose()
 
             interface IBlobStore with
@@ -958,6 +966,8 @@ module ``Octree impl`` =
             let chunks = ConcurrentBag<int * Point[]>()
             let trees = ConcurrentBag<Octree>()
             use freeChunks = new SemaphoreSlim(maxInMemoryChunks)
+            use producedChunks = new SemaphoreSlim(0)
+            use producedTrees = new SemaphoreSlim(0)
 
 
             let totalChunks = ceil (float pointCount / float chunkSize) |> int
@@ -972,10 +982,10 @@ module ``Octree impl`` =
                 async {
                     do! Async.SwitchToNewThread()
                     while true do
-                        do! Async.Sleep(500)
                         Log.line "parser:   %.2f%%" (100.0 * float parsedPoints / float pointCount)
                         Log.line "building: %.2f%%" (100.0 * float processedChunks / float totalChunks)
                         Log.line "merge:    %.2f%%" (100.0 * float merged / float totalMerges)
+                        Thread.Sleep(500)
                 }
 
 
@@ -989,9 +999,10 @@ module ``Octree impl`` =
                     for chunk in Seq.chunkBySize chunkSize points do
                         parsedPoints <- parsedPoints + chunk.Length
                         sw.Stop()
-                        let! _ = freeChunks.WaitAsync() |> Async.AwaitIAsyncResult
+                        freeChunks.Wait() 
                         sw.Start()
                         chunks.Add(parsedChunks, chunk)
+                        producedChunks.Release() |> ignore
                         parsedChunks <- parsedChunks + 1
 
                     sw.Stop()
@@ -1001,21 +1012,25 @@ module ``Octree impl`` =
 
             let smallTreeBuilder =
                 async {
+                    let! ct = Async.CancellationToken
                     do! Async.SwitchToNewThread()
                     let sw = Stopwatch()
                     sw.Start()
                     while processedChunks < totalChunks do
+                        sw.Stop()
+                        producedChunks.Wait(ct)
+                        sw.Start()
                         match chunks.TryTake() with
                             | (true, (i,chunk)) ->
                                 let mutable tree = OctreeImp.empty db splitThreshold
                                 tree <- OctreeImp.add chunk tree
                                 trees.Add(tree)
-
+                                producedTrees.Release() |> ignore
 
                                 freeChunks.Release() |> ignore
                                 Interlocked.Increment(&processedChunks) |> ignore
                             | _ ->
-                                ()
+                                producedChunks.Release() |> ignore
                     sw.Stop()
                     return sw.Elapsed
                 }
@@ -1026,17 +1041,24 @@ module ``Octree impl`` =
                     let sw = Stopwatch()
                     sw.Start()
                     while merged < totalMerges do
+                        producedTrees.Wait(); producedTrees.Wait()
                         match trees.TryTake(), trees.TryTake() with
                             | (true, l), (true, r) ->
+                                Log.startTimed "merge running"
                                 let res = OctreeImp.mergeWith l r
+                                Log.stop()
                                 trees.Add res
+                                producedTrees.Release() |> ignore
                                 Interlocked.Increment(&merged) |> ignore
 
                             | (true, t), _ | _, (true, t) ->
                                 trees.Add t
+                                producedTrees.Release() |> ignore
+                                producedTrees.Release() |> ignore
 
                             | _ ->
-                                ()
+                                producedTrees.Release() |> ignore
+                                producedTrees.Release() |> ignore
                     sw.Stop()
                     return sw.Elapsed
                 }
@@ -1050,7 +1072,7 @@ module ``Octree impl`` =
             
             let threads = Environment.ProcessorCount / 2 |> max 2
             let parser = Async.StartAsTask parser
-            let smallTreeBuilders = Array.init (threads - 1) (fun _ -> Async.StartAsTask smallTreeBuilder)
+            let smallTreeBuilders = Array.init threads (fun _ -> Async.StartAsTask smallTreeBuilder)
             let mergers = Array.init threads (fun _ -> Async.StartAsTask merger)
             
 
@@ -1373,7 +1395,7 @@ let run() =
     let top = db.Ref("tree")
 
     if not top.HasValue then
-        let offset, cnt, pts = Pts.read @"E:\random.pts" //@"D:\Sonstiges\Laserscan-P20_Beiglboeck-2015.pts"
+        let offset, cnt, pts = Pts.read @"D:\Sonstiges\Laserscan-P20_Beiglboeck-2015.pts"
         let tree = Octree.build db 5000 offset cnt pts
         top.Value <- tree
 
