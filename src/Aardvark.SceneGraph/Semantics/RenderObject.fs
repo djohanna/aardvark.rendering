@@ -208,4 +208,4 @@ module RenderObjectSemantics =
             }
 
         member x.OverlayTasks(r : Sg.OverlayNode) =
-            ASet.single (r.RenderPass, r.RenderTask)
+            ASet.single (0UL, r.RenderTask)

@@ -56,9 +56,12 @@ module Render2TexturePrimitive =
             ]
         )
   
+    let ct = Mod.init Trafo3d.Identity
+
     // Default scene graph setup with static camera
     let render2TextureSg =
         quadSg
+            |> Sg.trafo ct
             |> Sg.viewTrafo ~~(CameraView.lookAt (V3d(3,3,3)) V3d.OOO V3d.OOI                   |> CameraView.viewTrafo )
             |> Sg.projTrafo ~~(Frustum.perspective 60.0 0.01 10.0 (float size.X / float size.Y) |> Frustum.projTrafo    )
             |> Sg.effect [DefaultSurfaces.trafo |> toEffect; DefaultSurfaces.constantColor C4f.White |> toEffect]
@@ -67,9 +70,25 @@ module Render2TexturePrimitive =
     let task = runtime.CompileRender(signature, render2TextureSg)
     let clear = runtime.CompileClear(signature, ~~C4f.Red, ~~1.0)
 
-    // Run the render task imperatively
-    clear.Run(null, fbo |> OutputDescription.ofFramebuffer) |> ignore
-    task.Run(null, fbo |> OutputDescription.ofFramebuffer) |> ignore
+    let mutable l = 0.0
+    let rtt = 
+        RenderTask.custom (fun _ -> 
+                        // Run the render task imperatively
+                        clear.Run(null, fbo |> OutputDescription.ofFramebuffer) |> ignore
+                        task.Run(null, fbo |> OutputDescription.ofFramebuffer)
+                    )
+
+    let t = 
+        async {
+            do! Async.SwitchToNewThread()
+            while true do
+                transact (fun () -> Mod.change ct (Trafo3d.Rotation(V3d.III.Normalized,l)))
+                l <- l + 0.1
+                
+                do! Async.Sleep 10
+        }
+
+    t |> Async.Start
 
     // this module demonstrates how to read back textures. In order to see the result,
     // a form containing the readback result is shown
@@ -100,9 +119,11 @@ module Render2TexturePrimitive =
             |> Sg.viewTrafo (viewTrafo   () |> Mod.map CameraView.viewTrafo )
             |> Sg.projTrafo (perspective () |> Mod.map Frustum.projTrafo    )
 
+    let sg2 = Sg.andAlso (Sg.overlay rtt) sg
+
     let run () =
         Aardvark.Rendering.Interactive.FsiSetup.init (Path.combine [__SOURCE_DIRECTORY__; ".."; ".."; ".."; "bin";"Debug"])
-        setSg sg
+        setSg sg2
         win.Run()
 
 open Render2TexturePrimitive
