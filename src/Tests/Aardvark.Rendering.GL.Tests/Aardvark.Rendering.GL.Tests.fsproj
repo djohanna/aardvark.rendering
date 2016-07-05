@@ -65,6 +65,7 @@
     <Compile Include="ShaderTests.fs" />
     <Compile Include="MultiStageAgTest.fs" />
     <Compile Include="RenderingTests.fs" />
+    <Compile Include="PerformanceTest.fs" />
     <Compile Include="Program.fs" />
     <Content Include="App.config" />
   </ItemGroup>
