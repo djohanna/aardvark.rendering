@@ -70,6 +70,11 @@ type InstructionCode =
     | StencilMask                   = 56
     | DrawBuffers                   = 57
 
+    | BeginTransformFeedback        = 58
+    | EndTransformFeedback          = 59
+    | PauseTransformFeedback        = 60
+    | ResumeTransformFeedback       = 61
+
 
 /// <summary>
 /// an instrution consists of an instruction-code and the corresponding arguments
@@ -189,3 +194,16 @@ type Instruction internal(code : InstructionCode, args : obj[]) =
 
     static member DrawBuffers (n : int) (ptr : nativeint) =
         Instruction(InstructionCode.DrawBuffers, [|n :> obj; ptr :> obj |])
+
+    static member BeginTransformFeedback (primitiveMode : int) =
+        Instruction(InstructionCode.BeginTransformFeedback, [| primitiveMode :> obj |])
+
+    static member EndTransformFeedback =
+        Instruction(InstructionCode.BeginTransformFeedback, [||])
+
+    static member PauseTransformFeedback =
+        Instruction(InstructionCode.PauseTransformFeedback, [||])
+
+    static member ResumeTransformFeedback =
+        Instruction(InstructionCode.ResumeTransformFeedback, [||])
+

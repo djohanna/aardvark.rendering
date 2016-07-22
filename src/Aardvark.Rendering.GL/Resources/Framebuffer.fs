@@ -22,12 +22,90 @@ module private FramebufferMemoryUsage =
     let removeVirtualFbo (ctx:Context) =
         Interlocked.Decrement(&ctx.MemoryUsage.VirtualFramebufferCount) |> ignore
 
+type FramebufferSignature(runtime : IRuntime, colors : Map<int, Symbol * AttachmentSignature>, images : Map<int, Symbol>, depth : Option<AttachmentSignature>, stencil : Option<AttachmentSignature>) =
+   
+    static let empty = FramebufferSignature(Unchecked.defaultof<_>, Map.empty, Map.empty, None, None)
+
+    let signatureAssignableFrom (mine : AttachmentSignature) (other : AttachmentSignature) =
+        let myCol = RenderbufferFormat.toColFormat mine.format
+        let otherCol = RenderbufferFormat.toColFormat other.format
+        
+        myCol = otherCol
+
+    let colorsAssignableFrom (mine : Map<int, Symbol * AttachmentSignature>) (other : Map<int, Symbol * AttachmentSignature>) =
+        mine |> Map.forall (fun id (sem, signature) ->
+            match Map.tryFind id other with
+                | Some (otherSem, otherSig) when sem = otherSem ->
+                    signatureAssignableFrom signature otherSig
+                | None -> true
+                | _ -> false
+        )
+
+    let depthAssignableFrom (mine : Option<AttachmentSignature>) (other : Option<AttachmentSignature>) =
+        match mine, other with
+            | Some mine, Some other -> signatureAssignableFrom mine other
+            | _ -> true
+
+    static member Empty = empty
+
+    member x.Runtime = runtime
+    member x.ColorAttachments = colors
+    member x.DepthAttachment = depth
+    member x.StencilAttachment = depth
+    member x.Images = images
+    member x.IsAssignableFrom (other : IFramebufferSignature) =
+        if x.Equals other then 
+            true
+        else
+            match other with
+                | :? FramebufferSignature as other ->
+                    runtime = other.Runtime &&
+                    colorsAssignableFrom colors other.ColorAttachments
+                    // TODO: check depth and stencil (cumbersome for combined DepthStencil attachments)
+                | _ ->
+                    false
+
+    override x.ToString() =
+        sprintf "{ ColorAttachments = %A; DepthAttachment = %A; StencilAttachment = %A }" colors depth stencil
+
+    interface IFramebufferSignature with
+        member x.Runtime = runtime
+        member x.ColorAttachments = colors
+        member x.DepthAttachment = depth
+        member x.StencilAttachment = stencil
+        member x.IsAssignableFrom other = x.IsAssignableFrom other
+        member x.Images = images
+
+type TransformFeedbackSignature(runtime : IRuntime, program : Program, primitiveType : IndexedGeometryMode, wantedSemantics : list<Symbol>) =
+    member x.WantedSemantics = wantedSemantics
+    member x.PrimitiveType = primitiveType
+    member x.Program = program
+
+    interface IFramebufferSignature with
+        member x.Runtime = runtime
+        member x.ColorAttachments = Map.empty
+        member x.DepthAttachment = None
+        member x.StencilAttachment = None
+        member x.IsAssignableFrom other = true
+        member x.Images = Map.empty
+
+
 type Framebuffer(ctx : Context, signature : IFramebufferSignature, create : Aardvark.Rendering.GL.ContextHandle -> int, destroy : int -> unit, 
                  bindings : list<int * Symbol * IFramebufferOutput>, depth : Option<IFramebufferOutput>) =
     inherit UnsharedObject(ctx, (fun h -> addPhysicalFbo ctx; create h), (fun h -> removePhysicalFbo ctx; destroy h))
 
     let mutable bindings = bindings
     let mutable depth = depth
+
+    static let empty = 
+        new Framebuffer(
+            Unchecked.defaultof<_>,
+            FramebufferSignature.Empty,
+            (fun _ -> 0),
+            (fun _ -> ()),
+            [],
+            None
+        )
 
     let resolution() =
         match depth with
@@ -47,6 +125,19 @@ type Framebuffer(ctx : Context, signature : IFramebufferSignature, create : Aard
         let bindings = (bindings |> List.map (fun (_,s,o) -> (s,o)))
         let depth = match depth with | Some d -> [DefaultSemantic.Depth, d] | _ -> []
         List.append bindings depth |> Map.ofList
+
+    static member Empty = empty
+
+    static member EmptyWithSignature s =
+        new Framebuffer(
+            Unchecked.defaultof<_>,
+            s,
+            (fun _ -> 0),
+            (fun _ -> ()),
+            [],
+            None
+        )
+
 
     member x.Size 
         with get() = size

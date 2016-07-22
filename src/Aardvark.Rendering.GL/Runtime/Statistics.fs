@@ -221,7 +221,7 @@ type OpenGlQuery(target : QueryTarget) =
     member x.Stop() =
         if running then
             running <- false
-            GL.EndQuery(target)
+            x.DoStop()
             x.Pop()
 
     member x.Reset() =
@@ -235,8 +235,11 @@ type OpenGlQuery(target : QueryTarget) =
         x.Start()
 
     member x.Value =
-        let mutable res = 0L
-        GL.GetQueryObject(query, GetQueryObjectParam.QueryResult, &res)
-        res + (children |> List.sumBy (fun q -> q.Value))
+        if query < 0 then
+            0L
+        else
+            let mutable res = 0L
+            GL.GetQueryObject(query, GetQueryObjectParam.QueryResult, &res)
+            res + (children |> List.sumBy (fun q -> q.Value))
 
             

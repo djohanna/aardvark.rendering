@@ -646,6 +646,25 @@ module OpenGl =
         /// </summary>
         let DrawBuffers = getProcAddress "glDrawBuffers"
 
+        /// <summary>
+        /// https://www.opengl.org/sdk/docs/man/html/glBeginTransformFeedback.xhtml
+        /// </summary>
+        let BeginTransformFeedback = getProcAddress "glBeginTransformFeedback"
+
+        /// <summary>
+        /// https://www.opengl.org/sdk/docs/man/html/glBeginTransformFeedback.xhtml
+        /// </summary>
+        let EndTransformFeedback = getProcAddress "glEndTransformFeedback"
+
+        /// <summary>
+        /// https://www.opengl.org/sdk/docs/man/html/glPauseTransformFeedback.xhtml
+        /// </summary>
+        let PauseTransformFeedback = getProcAddress "glPauseTransformFeedback"
+
+        /// <summary>
+        /// https://www.opengl.org/sdk/docs/man/html/glResumeTransformFeedback.xhtml
+        /// </summary>
+        let ResumeTransformFeedback = getProcAddress "glResumeTransformFeedback"
 
         let Uniform1iv = getProcAddress "glUniform1iv"
         let Uniform1fv = getProcAddress "glUniform1fv"
@@ -727,6 +746,10 @@ module OpenGl =
               DepthMask, "glDepthMask"
               ColorMask, "glColorMaski"
               DrawBuffers, "glDrawBuffers"
+              BeginTransformFeedback, "glBeginTransformFeedback"
+              EndTransformFeedback, "glEndTransformFeedback"
+              PauseTransformFeedback, "glPauseTransformFeedback"
+              ResumeTransformFeedback, "glResumeTransformFeedback"
 
             ] |> Map.ofList
 
@@ -805,3 +828,8 @@ module OpenGl =
         let StencilMask : int -> unit = wrap Pointers.StencilMask
         let ColorMask : int -> int  -> int -> int -> int -> unit = wrap Pointers.ColorMask
         let DrawBuffers : int -> nativeint -> unit = wrap Pointers.DrawBuffers
+
+        let BeginTransformFeedback : int -> unit = wrap Pointers.BeginTransformFeedback
+        let EndTransformFeedback : unit -> unit = wrap Pointers.EndTransformFeedback
+        let PauseTransformFeedback : unit -> unit = wrap Pointers.PauseTransformFeedback
+        let ResumeTransformFeedback : unit -> unit = wrap Pointers.ResumeTransformFeedback

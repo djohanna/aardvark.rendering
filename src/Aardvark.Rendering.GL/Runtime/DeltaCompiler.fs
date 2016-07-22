@@ -30,41 +30,50 @@ module DeltaCompiler =
 
     let compileDelta (prev : PreparedRenderObject) (me : PreparedRenderObject) =
         compiled {
+            let isTransformFeedback =
+                match me.FramebufferSignature with
+                    | :? TransformFeedbackSignature as f -> true
+                    | _ -> false
 
-            // set the output-buffers
-            if prev.DepthBufferMask <> me.DepthBufferMask then
-                yield Instructions.setDepthMask me.DepthBufferMask
+            let fragmentOutput = not isTransformFeedback
 
-            if prev.StencilBufferMask <> me.StencilBufferMask then
-                yield Instructions.setStencilMask me.StencilBufferMask
+            if fragmentOutput then
+                // set the output-buffers
+                if prev.DepthBufferMask <> me.DepthBufferMask then
+                    yield Instructions.setDepthMask me.DepthBufferMask
 
-            if prev.DrawBuffers <> me.DrawBuffers then
-                match me.DrawBuffers with
-                    | None -> 
-                        let! s = compilerState
-                        yield Instruction.DrawBuffers s.info.drawBufferCount s.info.drawBuffers
-                    | Some b ->
-                        yield Instruction.DrawBuffers b.Count (NativePtr.toNativeInt b.Buffers)
+                if prev.StencilBufferMask <> me.StencilBufferMask then
+                    yield Instructions.setStencilMask me.StencilBufferMask
 
-            //set all modes if needed
-            if prev.DepthTest <> me.DepthTest && me.DepthTest <> null then
-                yield Instructions.setDepthTest me.DepthTest
+                if prev.DrawBuffers <> me.DrawBuffers then
+                    match me.DrawBuffers with
+                        | None -> 
+                            let! s = compilerState
+                            yield Instruction.DrawBuffers s.info.drawBufferCount s.info.drawBuffers
+                        | Some b ->
+                            yield Instruction.DrawBuffers b.Count (NativePtr.toNativeInt b.Buffers)
 
-            if prev.FillMode <> me.FillMode && me.FillMode <> null then
-                yield Instructions.setFillMode me.FillMode
+                //set all modes if needed
+                if prev.DepthTest <> me.DepthTest && me.DepthTest <> null then
+                    yield Instructions.setDepthTest me.DepthTest
 
-            if prev.CullMode <> me.CullMode && me.CullMode <> null then
-                yield Instructions.setCullMode me.CullMode
+                if prev.FillMode <> me.FillMode && me.FillMode <> null then
+                    yield Instructions.setFillMode me.FillMode
 
-            if prev.BlendMode <> me.BlendMode && me.BlendMode <> null then
-                yield Instructions.setBlendMode me.BlendMode
+                if prev.CullMode <> me.CullMode && me.CullMode <> null then
+                    yield Instructions.setCullMode me.CullMode
 
-            if prev.StencilMode <> me.StencilMode && me.StencilMode <> null then
-                yield Instructions.setStencilMode me.StencilMode
+                if prev.BlendMode <> me.BlendMode && me.BlendMode <> null then
+                    yield Instructions.setBlendMode me.BlendMode
 
-            // bind the program (if needed)
-            if prev.Program <> me.Program then
-                yield Instructions.bindProgram me.Program
+                if prev.StencilMode <> me.StencilMode && me.StencilMode <> null then
+                    yield Instructions.setStencilMode me.StencilMode
+
+                // bind the program (if needed)
+                if prev.Program <> me.Program then
+                    yield Instructions.bindProgram me.Program
+
+
 
             // bind all uniform-buffers (if needed)
             for (id,ub) in Map.toSeq me.UniformBuffers do
@@ -176,7 +185,7 @@ module DeltaCompiler =
                 )
 
             yield Instruction.BindVertexArray 0
-            yield Instruction.BindProgram 0
+            //yield Instruction.BindProgram 0
             yield Instruction.BindBuffer (int OpenTK.Graphics.OpenGL4.BufferTarget.DrawIndirectBuffer) 0
 
             

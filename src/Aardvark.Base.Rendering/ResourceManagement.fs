@@ -320,6 +320,31 @@ and ResourceCache<'h when 'h : equality>(parent : Option<ResourceCache<'h>>, ren
     member x.Count = store.Count
     member x.Clear() = store.Clear()
 
+type ConstantResource<'h when 'h : equality>(kind : ResourceKind, handle : 'h) =
+    inherit ConstantObject()
+
+    let h = Mod.constant handle
+
+    member x.Handle = handle
+
+    override x.GetHashCode() = handle.GetHashCode()
+
+    override x.Equals o =
+        match o with
+            | :? ConstantResource<'h> as o -> o.Handle = x.Handle
+            | _ -> false
+
+    interface IDisposable with
+        member x.Dispose() = ()
+
+    interface IResource<'h> with
+        member x.Kind = kind
+        member x.AddRef() = ()
+        member x.RemoveRef() = ()
+        member x.Handle = h
+        member x.Update caller = FrameStatistics.Zero
+        member x.Info = ResourceInfo.Zero
+
 type InputSet(o : IAdaptiveObject) =
     let l = obj()
     let inputs = ReferenceCountingSet<IAdaptiveObject>()

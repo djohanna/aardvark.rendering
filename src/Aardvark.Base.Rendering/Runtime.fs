@@ -83,6 +83,13 @@ and IRenderTask =
     abstract member Run : IAdaptiveObject * OutputDescription -> RenderingResult
     abstract member FrameId : uint64
 
+and ITransformFeedbackRenderTask =
+    inherit IDisposable
+    inherit IAdaptiveObject
+    abstract member WantedSemantics : list<Symbol>
+    abstract member Mode : IndexedGeometryMode
+    abstract member Run : IAdaptiveObject * IBackendBuffer * int64 * int64 -> FrameStatistics
+
 and [<AllowNullLiteral>] IFramebufferSignature =
     abstract member Runtime : IRuntime
     abstract member ColorAttachments : Map<int, Symbol * AttachmentSignature>
@@ -143,7 +150,17 @@ module OutputDescription =
             stencilMaskFront = UInt32.MaxValue
             stencilMaskBack  = UInt32.MaxValue
         }
-   
+ 
+    let empty (framebuffer : IFramebuffer) =
+        { 
+            framebuffer = framebuffer
+            images = Map.empty
+            viewport = Box2i.FromMinAndSize(V2i.OO, framebuffer.Size)
+            colorWrite = Map.empty 
+            depthWrite = true
+            stencilMaskFront = UInt32.MaxValue
+            stencilMaskBack  = UInt32.MaxValue
+        }  
 
 [<Extension>]
 type RenderTaskRunExtensions() =

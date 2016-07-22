@@ -8,56 +8,6 @@ open OpenTK.Graphics
 open OpenTK.Graphics.OpenGL4
 open Aardvark.Base.Incremental
 
-type FramebufferSignature(runtime : IRuntime, colors : Map<int, Symbol * AttachmentSignature>, images : Map<int, Symbol>, depth : Option<AttachmentSignature>, stencil : Option<AttachmentSignature>) =
-   
-    let signatureAssignableFrom (mine : AttachmentSignature) (other : AttachmentSignature) =
-        let myCol = RenderbufferFormat.toColFormat mine.format
-        let otherCol = RenderbufferFormat.toColFormat other.format
-        
-        myCol = otherCol
-
-    let colorsAssignableFrom (mine : Map<int, Symbol * AttachmentSignature>) (other : Map<int, Symbol * AttachmentSignature>) =
-        mine |> Map.forall (fun id (sem, signature) ->
-            match Map.tryFind id other with
-                | Some (otherSem, otherSig) when sem = otherSem ->
-                    signatureAssignableFrom signature otherSig
-                | None -> true
-                | _ -> false
-        )
-
-    let depthAssignableFrom (mine : Option<AttachmentSignature>) (other : Option<AttachmentSignature>) =
-        match mine, other with
-            | Some mine, Some other -> signatureAssignableFrom mine other
-            | _ -> true
-
-    member x.Runtime = runtime
-    member x.ColorAttachments = colors
-    member x.DepthAttachment = depth
-    member x.StencilAttachment = depth
-    member x.Images = images
-    member x.IsAssignableFrom (other : IFramebufferSignature) =
-        if x.Equals other then 
-            true
-        else
-            match other with
-                | :? FramebufferSignature as other ->
-                    runtime = other.Runtime &&
-                    colorsAssignableFrom colors other.ColorAttachments
-                    // TODO: check depth and stencil (cumbersome for combined DepthStencil attachments)
-                | _ ->
-                    false
-
-    override x.ToString() =
-        sprintf "{ ColorAttachments = %A; DepthAttachment = %A; StencilAttachment = %A }" colors depth stencil
-
-    interface IFramebufferSignature with
-        member x.Runtime = runtime
-        member x.ColorAttachments = colors
-        member x.DepthAttachment = depth
-        member x.StencilAttachment = stencil
-        member x.IsAssignableFrom other = x.IsAssignableFrom other
-        member x.Images = images
-
 type Runtime(ctx : Context, shareTextures : bool, shareBuffers : bool) =
 
     static let versionRx = System.Text.RegularExpressions.Regex @"([0-9]+\.)*[0-9]+"
@@ -225,6 +175,20 @@ type Runtime(ctx : Context, shareTextures : bool, shareBuffers : bool) =
 
             | Static _ -> 
                 failwith "[GL] static sorting not implemented"
+
+    member x.CompileTransformFeedback (surface : ISurface, mode : IndexedGeometryMode, wanted : list<Symbol>, engine : IMod<BackendConfiguration>, set : aset<IRenderObject>) =
+        let eng = engine.GetValue()
+        let shareTextures = eng.sharing &&& ResourceSharing.Textures <> ResourceSharing.None
+        let shareBuffers = eng.sharing &&& ResourceSharing.Buffers <> ResourceSharing.None
+
+        let program = 
+            match SurfaceCompilers.compileTransformFeedback ctx wanted surface with
+                | Success prog -> prog
+                | Error err ->
+                    Log.warn "[GL] could not compile surface: %s" err
+                    failwithf "[GL] could not compile surface: %s" err
+
+        new RenderTasks.TransformFeedbackRenderTask(manager, program, wanted, mode, set, engine, shareTextures, shareBuffers) :> ITransformFeedbackRenderTask
 
     member x.PrepareRenderObject(fboSignature : IFramebufferSignature, rj : IRenderObject) : IPreparedRenderObject =
         match rj with

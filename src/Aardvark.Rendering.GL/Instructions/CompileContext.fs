@@ -135,6 +135,12 @@ module ExecutionContext =
             | InstructionCode.ColorMask                     -> OpenGl.Pointers.ColorMask
             | InstructionCode.DrawBuffers                   -> OpenGl.Pointers.DrawBuffers
 
+            | InstructionCode.BeginTransformFeedback        -> OpenGl.Pointers.BeginTransformFeedback
+            | InstructionCode.EndTransformFeedback          -> OpenGl.Pointers.EndTransformFeedback
+            | InstructionCode.PauseTransformFeedback        -> OpenGl.Pointers.PauseTransformFeedback
+            | InstructionCode.ResumeTransformFeedback       -> OpenGl.Pointers.ResumeTransformFeedback
+
+
             | _ -> raise <| OpenGLException (OpenTK.Graphics.OpenGL4.ErrorCode.InvalidEnum, sprintf "cannot get function pointer for: %A" i)
 
 
@@ -198,6 +204,12 @@ module ExecutionContext =
             OpenGl.Pointers.StencilMask, fun args -> Instruction(InstructionCode.StencilMask, args)
             OpenGl.Pointers.ColorMask, fun args -> Instruction(InstructionCode.ColorMask, args)
             OpenGl.Pointers.DrawBuffers, fun args -> Instruction(InstructionCode.DrawBuffers, args)
+
+            
+            OpenGl.Pointers.BeginTransformFeedback, fun args -> Instruction(InstructionCode.BeginTransformFeedback, args)
+            OpenGl.Pointers.EndTransformFeedback, fun args -> Instruction(InstructionCode.EndTransformFeedback, args)
+            OpenGl.Pointers.PauseTransformFeedback, fun args -> Instruction(InstructionCode.PauseTransformFeedback, args)
+            OpenGl.Pointers.ResumeTransformFeedback, fun args -> Instruction(InstructionCode.ResumeTransformFeedback, args)
         ]
 
     let callToInstruction (ptr : nativeint, args : obj[]) =
@@ -291,10 +303,16 @@ module ExecutionContext =
             | InstructionCode.ColorMask                -> OpenGl.Unsafe.ColorMask (int 0) (int 1) (int 2) (int 3) (int 4)
             | InstructionCode.DrawBuffers              -> OpenGl.Unsafe.DrawBuffers (int 0) (ptr 1) 
 
+            | InstructionCode.BeginTransformFeedback   -> OpenGl.Unsafe.BeginTransformFeedback (int 0)
+            | InstructionCode.EndTransformFeedback     -> OpenGl.Unsafe.EndTransformFeedback ()
+            | InstructionCode.PauseTransformFeedback   -> OpenGl.Unsafe.PauseTransformFeedback ()
+            | InstructionCode.ResumeTransformFeedback  -> OpenGl.Unsafe.ResumeTransformFeedback ()
+
             | InstructionCode.MultiDrawArraysIndirect  -> 
                 OpenGl.Unsafe.MultiDrawArraysIndirect (int 0) (ptr 1) (drawCount 2) (int 3)
             | InstructionCode.MultiDrawElementsIndirect  -> 
                 OpenGl.Unsafe.MultiDrawElementsIndirect (int 0) (int 1) (ptr 2) (drawCount 3) (int 4)
+
 
             | InstructionCode.GetError                 -> ()
             | _ -> failwithf "unknown instruction: %A" i

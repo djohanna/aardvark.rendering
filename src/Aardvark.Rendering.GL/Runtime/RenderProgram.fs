@@ -12,8 +12,8 @@ open Aardvark.Rendering.GL.Compiler
 
 
 type IRenderProgram =
-    inherit IAdaptiveProgram<unit>
-    abstract member Run : unit -> FrameStatistics
+    inherit IAdaptiveProgram<Framebuffer>
+    abstract member Run : Framebuffer -> FrameStatistics
 
 
 [<AbstractClass>]
@@ -22,19 +22,19 @@ type AbstractRenderProgram<'input when 'input :> IAdaptiveObject>() =
     
     abstract member Dispose : unit -> unit
     abstract member Update : HashSet<'input> -> unit
-    abstract member Run : unit -> FrameStatistics
+    abstract member Run : Framebuffer -> FrameStatistics
 
     interface IRenderProgram with
-        member x.Run() = x.Run()
+        member x.Run fbo = x.Run fbo
 
-    interface IAdaptiveProgram<unit> with
+    interface IAdaptiveProgram<Framebuffer> with
         member x.Update caller =
             x.EvaluateIfNeeded' caller AdaptiveProgramStatistics.Zero (fun dirty ->
                 x.Update dirty
                 AdaptiveProgramStatistics.Zero
             )
 
-        member x.Run s = x.Run() |> ignore
+        member x.Run fbo = x.Run fbo |> ignore
         member x.Disassemble() = null
         member x.AutoDefragmentation 
             with get() = false
@@ -53,19 +53,19 @@ type AbstractRenderProgram() =
     
     abstract member Dispose : unit -> unit
     abstract member Update : unit -> unit
-    abstract member Run : unit -> FrameStatistics
+    abstract member Run : Framebuffer -> FrameStatistics
 
     interface IRenderProgram with
-        member x.Run() = x.Run()
+        member x.Run fbo = x.Run fbo
 
-    interface IAdaptiveProgram<unit> with
+    interface IAdaptiveProgram<Framebuffer> with
         member x.Update caller =
             x.EvaluateIfNeeded caller AdaptiveProgramStatistics.Zero (fun () ->
                 x.Update ()
                 AdaptiveProgramStatistics.Zero
             )
 
-        member x.Run s = x.Run() |> ignore
+        member x.Run fbo = x.Run fbo |> ignore
         member x.Disassemble() = null
         member x.AutoDefragmentation 
             with get() = false
@@ -84,22 +84,22 @@ module RenderProgram =
     type private WrappedRenderProgram(inner : IAdaptiveProgram<unit>) =
         inherit AdaptiveObject()
 
-        abstract member Run : unit -> FrameStatistics
-        default x.Run() = inner.Run(); FrameStatistics.Zero
+        abstract member Run : Framebuffer -> FrameStatistics
+        default x.Run fbo = inner.Run (); FrameStatistics.Zero
 
-        member x.RunInner() = inner.Run()
+        member x.RunInner () = inner.Run ()
 
 
         interface IRenderProgram with
-            member x.Run() = x.Run()
+            member x.Run fbo = x.Run fbo
 
-        interface IAdaptiveProgram<unit> with
+        interface IAdaptiveProgram<Framebuffer> with
             member x.Update caller =
                 x.EvaluateIfNeeded caller AdaptiveProgramStatistics.Zero (fun () ->
                     inner.Update(x)
                 )
 
-            member x.Run s = x.Run() |> ignore
+            member x.Run fbo = x.Run fbo |> ignore
             member x.Disassemble() = inner.Disassemble()
             member x.AutoDefragmentation 
                 with get() = inner.AutoDefragmentation
@@ -184,7 +184,7 @@ module RenderProgram =
 //                h
 
             { new WrappedRenderProgram(AdaptiveProgram.custom comparer handler input) with
-                override x.Run() =
+                override x.Run fbo =
                     x.RunInner()
                     !scope.stats
             } :> IRenderProgram
@@ -196,7 +196,7 @@ module RenderProgram =
             let handler = FragmentHandler.wrapSimple instructionToCall ExecutionContext.callToInstruction (compileFull scope) inner
 
             { new WrappedRenderProgram(AdaptiveProgram.custom comparer handler input) with
-                override x.Run() =
+                override x.Run fbo =
                     x.RunInner()
                     !scope.stats
             } :> IRenderProgram
@@ -261,7 +261,7 @@ module RenderProgram =
                 }
 
             { new WrappedRenderProgram(AdaptiveProgram.custom comparer handler input) with
-                override x.Run() =
+                override x.Run fbo =
                     x.RunInner()
 
                     let baseStats = !scope.stats
@@ -333,7 +333,7 @@ module RenderProgram =
                 }  
 
             { new WrappedRenderProgram(AdaptiveProgram.custom comparer handler input) with
-                override x.Run() =
+                override x.Run fbo =
                     x.RunInner()
                     !scope.stats
             } :> IRenderProgram
@@ -363,7 +363,7 @@ module RenderProgram =
                 }  
 
             { new WrappedRenderProgram(AdaptiveProgram.custom comparer handler input) with
-                override x.Run() =
+                override x.Run fbo =
                     x.RunInner()
                     !scope.stats
             } :> IRenderProgram
@@ -408,7 +408,7 @@ module RenderProgram =
                 }  
 
             { new WrappedRenderProgram(AdaptiveProgram.custom comparer handler input) with
-                override x.Run() =
+                override x.Run fbo =
                     x.RunInner()
                     !scope.stats
             } :> IRenderProgram
@@ -438,7 +438,7 @@ module RenderProgram =
                 }  
 
             { new WrappedRenderProgram(AdaptiveProgram.custom comparer handler input) with
-                override x.Run() =
+                override x.Run fbo =
                     x.RunInner()
                     !scope.stats
             } :> IRenderProgram

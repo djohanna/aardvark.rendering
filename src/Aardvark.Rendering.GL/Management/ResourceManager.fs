@@ -460,19 +460,33 @@ type ResourceManager private (parent : Option<ResourceManager>, ctx : Context, r
         })
 
     member x.CreateSurface(signature : IFramebufferSignature, surface : IMod<ISurface>) =
-        let create (s : ISurface) =
-            match SurfaceCompilers.compile ctx signature s with
-                | Success program -> program
-                | Error e -> 
-                    Log.error "[GL] surface compilation failed: %s" e
-                    failwithf "[GL] surface compilation failed: %s" e
+        let key, create = 
+            match signature with
+                | :? TransformFeedbackSignature as s ->
+                    let wantedSemantics = s.WantedSemantics
+                    let create (s : ISurface) =
+                        match SurfaceCompilers.compileTransformFeedback ctx wantedSemantics s with
+                            | Success program -> program
+                            | Error e -> 
+                                Log.error "[GL] surface compilation failed: %s" e
+                                failwithf "[GL] surface compilation failed: %s" e
 
-        programCache.GetOrCreate<ISurface>(surface, [signature :> obj], {
+                    [wantedSemantics :> obj], create
+                | _ ->
+                    let create (s : ISurface) =
+                        match SurfaceCompilers.compile ctx signature s with
+                            | Success program -> program
+                            | Error e -> 
+                                Log.error "[GL] surface compilation failed: %s" e
+                                failwithf "[GL] surface compilation failed: %s" e
+                    [signature :> obj], create
+
+        programCache.GetOrCreate<ISurface>(surface, key, {
             create = fun b      -> create b
             update = fun h b    -> ctx.Delete(h); create b
             delete = fun h      -> ctx.Delete h
             info =   fun h      -> ResourceInfo.Zero
-            kind = ResourceKind.ShaderProgram
+            kind =   ResourceKind.ShaderProgram
         })
 
     member x.CreateSampler (sam : IMod<SamplerStateDescription>) =

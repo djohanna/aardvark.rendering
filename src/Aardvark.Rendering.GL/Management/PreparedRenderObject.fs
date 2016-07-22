@@ -290,6 +290,7 @@ type PreparedMultiRenderObject(children : list<PreparedRenderObject>) =
     interface IDisposable with
         member x.Dispose() = x.Dispose()
 
+
 [<Extension; AbstractClass; Sealed>]
 type ResourceManagerExtensions private() =
   
@@ -302,9 +303,15 @@ type ResourceManagerExtensions private() =
         let activation = rj.Activate()
 
         // create a program and get its handle (ISSUE: assumed to be constant here)
-        let program = x.CreateSurface(fboSignature, rj.Surface)
-        let prog = program.Handle.GetValue()
-
+        let program, prog =
+            match fboSignature with
+                | :? TransformFeedbackSignature as tf ->
+                    let res = new ConstantResource<_>(ResourceKind.ShaderProgram, tf.Program) :> IResource<_>
+                    res, tf.Program
+                | _ -> 
+                    let program = x.CreateSurface(fboSignature, rj.Surface)
+                    let prog = program.Handle.GetValue()
+                    program, prog
 
         let createdViews = System.Collections.Generic.List()
 
@@ -547,3 +554,22 @@ type ResourceManagerExtensions private() =
         res.ResourceCount <- res.Resources |> Seq.length
         res.ResourceCounts <- res.Resources |> Seq.countBy (fun r -> r.Kind) |> Map.ofSeq
         res
+
+    [<Extension>]
+    static member Prepare (x : ResourceManager, fboSignature : IFramebufferSignature, ro : IRenderObject) : PreparedMultiRenderObject =
+        match ro with
+            | :? RenderObject as r ->
+                new PreparedMultiRenderObject([ResourceManagerExtensions.Prepare(x, fboSignature, r)])
+
+            | :? PreparedRenderObject as prep ->
+                new PreparedMultiRenderObject([prep |> PreparedRenderObject.clone])
+
+            | :? MultiRenderObject as seq ->
+                let all = seq.Children |> List.collect(fun o -> (ResourceManagerExtensions.Prepare(x, fboSignature, o)).Children)
+                new PreparedMultiRenderObject(all)
+
+            | :? PreparedMultiRenderObject as seq ->
+                new PreparedMultiRenderObject (seq.Children |> List.map (PreparedRenderObject.clone))
+
+            | _ ->
+                failwithf "[ResourceManager] unsupported IRenderObject: %A" ro

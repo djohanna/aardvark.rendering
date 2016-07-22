@@ -64,3 +64,22 @@ module SurfaceCompilers =
                     else None) with
                     | Some k -> k
                     | None -> Error "Unknown surface type. "
+
+    let compileTransformFeedback (ctx : Context) (wantedSemantics : list<Symbol>) (s : ISurface) =
+        match s with
+            | :? Program as p -> 
+                if not p.IsTransformFeedbackProgram then ctx.TryCompileTransformFeedbackProgram(wantedSemantics, p)
+                else Success p
+
+            | :? BackendSurface as b ->
+                ctx.TryCompileTransformFeedbackProgram(wantedSemantics, b.Code)
+
+            | :? IGeneratedSurface as g ->
+                let signature = 
+                    let outputs = wantedSemantics |> List.map (fun s -> s, RenderbufferFormat.Rgba8)
+                    ctx.Runtime.CreateFramebufferSignature outputs
+                let bs = g.Generate(ctx.Runtime, signature)
+                ctx.TryCompileTransformFeedbackProgram(wantedSemantics, bs.Code)
+
+            | _ ->
+                Error (sprintf "[GL] unknown ISurface: %A" s)

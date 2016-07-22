@@ -43,7 +43,7 @@ module private Values =
 module OpenGLInterpreter =
     module GL = OpenGl.Unsafe
 
-    type GLState() =
+    type GLState(fbo : Framebuffer) =
         let mutable effectiveInstructions   = 0
         let mutable removedInstructions     = 0
 
@@ -102,6 +102,14 @@ module OpenGLInterpreter =
                 cell1 <- value 
                 cell2 <- value 
                 true
+
+
+        member x.Framebuffer = fbo
+        member x.FramebufferSignature = fbo.Signature
+        member x.IsTransformFeedback =
+            match fbo.Signature with
+                | :? TransformFeedbackSignature -> true
+                | _ -> false
 
 
         member x.EffectiveInstructions = effectiveInstructions
@@ -297,9 +305,9 @@ module OpenGLInterpreter =
             if x.ShouldSetVertexArray vao then
                 GL.BindVertexArray vao
 
-        member inline x.bindProgram (prog : int) =
-            if x.ShouldSetProgram prog then
-                GL.BindProgram prog
+        member inline x.bindProgram (prog : Program) =
+            if not x.IsTransformFeedback && x.ShouldSetProgram prog.Handle then
+                GL.BindProgram prog.Handle
 
         member inline x.activeTexture (slot : int) =
             if x.ShouldSetActiveTexture slot then
@@ -430,20 +438,20 @@ module OpenGLInterpreter =
 
     module Interpreter = 
 
-        let start() = 
+        let start(fbo : Framebuffer) = 
             match statePool.TryTake() with
                 | (true, state) -> 
                     state
                 | _ -> 
-                    let s = GLState()
+                    let s = GLState(fbo)
                     s
 
         let stop(s : GLState) =
             s.Clear()
             statePool.Add(s)
 
-        let inline run (f : GLState -> 'a) =
-            let state = start()
+        let inline run (fbo : Framebuffer) (f : GLState -> 'a) =
+            let state = start fbo
             try f state
             finally stop state
 
@@ -617,7 +625,7 @@ module OpenGLObjectInterpreter =
                         elif indexType = typeof<int32> then int OpenGl.Enums.IndexType.UnsignedInt
                         else failwithf "unsupported index type: %A"  indexType
 
-                gl.bindProgram program.Handle
+                gl.bindProgram program
 
                 for (id, ub) in Map.toSeq o.UniformBuffers do
                     let ub = ub.Handle.GetValue()
@@ -700,8 +708,8 @@ module ``Interpreter Extensions`` =
 
         override x.Update() = ()
         override x.Dispose() = ()
-        override x.Run() = 
-            Interpreter.run (fun gl -> 
+        override x.Run fbo = 
+            Interpreter.run fbo (fun gl -> 
                 for o in content do gl.render o
 
                 { FrameStatistics.Zero with

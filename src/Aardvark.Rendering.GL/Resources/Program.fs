@@ -63,6 +63,7 @@ type Program =
        Inputs : list<ActiveAttribute>
        Outputs : list<ActiveAttribute>
        SupportedModes : Option<Set<IndexedGeometryMode>>
+       IsTransformFeedbackProgram : bool
     } with
 
     interface IBackendSurface with
@@ -395,6 +396,9 @@ module ProgramExtensions =
 
 
     module ShaderCompiler = 
+        let allStages = Set.ofList [ ShaderStage.Vertex; ShaderStage.TessControl; ShaderStage.TessEval; ShaderStage.Geometry; ShaderStage.Pixel ]
+        let primitiveStages = Set.ofList [ ShaderStage.Vertex; ShaderStage.TessControl; ShaderStage.TessEval; ShaderStage.Geometry ]
+
         let tryCompileShader (stage : ShaderStage) (code : string) (entryPoint : string) (x : Context) =
             using x.ResourceLock (fun _ ->
                 let code = code.Replace(sprintf "%s(" entryPoint, "main(")
@@ -455,12 +459,12 @@ module ProgramExtensions =
 
             )
 
-        let tryCompileShaders (withFragment : bool) (code : string) (x : Context) =
-            let vs = code.Contains "void VS("
-            let tcs = code.Contains "void TCS("
-            let tev = code.Contains "void TEV"
-            let gs = code.Contains "void GS("
-            let fs = withFragment && code.Contains "void PS("
+        let tryCompileShaders (stages : Set<ShaderStage>) (code : string) (x : Context) =
+            let vs = Set.contains ShaderStage.Vertex stages && code.Contains "void VS("
+            let tcs = Set.contains ShaderStage.TessControl stages && code.Contains "void TCS("
+            let tev = Set.contains ShaderStage.TessEval stages && code.Contains "void TEV"
+            let gs = Set.contains ShaderStage.Geometry stages && code.Contains "void GS("
+            let fs = Set.contains ShaderStage.Pixel stages && code.Contains "void PS("
 
             let stages =
                 [
@@ -565,7 +569,14 @@ module ProgramExtensions =
 
                             match output with
                                 | Some o -> o
-                                | _ -> failwithf "[GL] could not get geometry-output %A" sem
+                                | _ -> 
+                                    if sem = DefaultSemantic.Positions then
+                                        match Map.tryFind "gl_Position" outputMap with
+                                            | Some o -> { o with semantic = string DefaultSemantic.Positions }
+                                            | _ ->
+                                                failwithf "[GL] could not get geometry-output %A" sem
+                                    else
+                                        failwithf "[GL] could not get geometry-output %A" sem
 
                         )
 
@@ -632,6 +643,7 @@ module ProgramExtensions =
                         Inputs = ProgramReflector.getActiveInputs handle
                         Outputs = outputs
                         SupportedModes = supported
+                        IsTransformFeedbackProgram = false
                     }
 
                     GL.UseProgram(0)
@@ -664,7 +676,7 @@ module ProgramExtensions =
 
         member x.TryCompileProgram(fboSignature : IFramebufferSignature, code : string) =
             using x.ResourceLock (fun _ ->
-                match x |> ShaderCompiler.tryCompileShaders true code with
+                match x |> ShaderCompiler.tryCompileShaders ShaderCompiler.allStages code with
                     | Success shaders ->
 
                         let imageSlots = fboSignature.Images |> Map.toSeq |> Seq.map (fun (a,b) -> b,a) |> Map.ofSeq
@@ -683,11 +695,14 @@ module ProgramExtensions =
                             GL.AttachShader(handle, s.Handle)
                             GL.Check "could not attach shader to program"
 
-                        match x |> ShaderCompiler.tryLinkProgram handle code shaders firstTexture imageSlots (ShaderCompiler.setFragDataLocations fboSignature) with
-                            | Success program ->
-                                Success program
-                            | Error err ->
-                                Error err
+                        ShaderCompiler.tryLinkProgram 
+                            handle 
+                            code 
+                            shaders 
+                            firstTexture 
+                            imageSlots 
+                            (ShaderCompiler.setFragDataLocations fboSignature) 
+                            x
 
                     
                     | Error err ->
@@ -696,7 +711,7 @@ module ProgramExtensions =
 
         member x.TryCompileTransformFeedbackProgram(wantedSemantics : list<Symbol>, code : string) =
             using x.ResourceLock (fun _ ->
-                match x |> ShaderCompiler.tryCompileShaders false code with
+                match x |> ShaderCompiler.tryCompileShaders ShaderCompiler.primitiveStages code with
                     | Success shaders ->
                         let shaders = shaders |> List.filter (fun s -> s.Stage <> ShaderStage.Pixel)
 
@@ -708,17 +723,49 @@ module ProgramExtensions =
                             GL.AttachShader(handle, s.Handle)
                             GL.Check "could not attach shader to program"
 
-             
-                        match x |> ShaderCompiler.tryLinkProgram handle code shaders 0 Map.empty (ShaderCompiler.setTransformFeedbackVaryings wantedSemantics) with
-                            | Success program ->
-                                Success program
-                            | Error err ->
-                                Error err
+                        let program =
+                            ShaderCompiler.tryLinkProgram 
+                                handle 
+                                code 
+                                shaders 
+                                0 
+                                Map.empty 
+                                (ShaderCompiler.setTransformFeedbackVaryings wantedSemantics)
+                                x
+
+                        match program with
+                            | Success p -> Success { p with IsTransformFeedbackProgram = true }
+                            | Error err -> Error err
 
                     
                     | Error err ->
                         Error err
             )
+
+        member x.TryCompileTransformFeedbackProgram(wantedSemantics : list<Symbol>, p : Program) =
+            let shaders = p.Shaders |> List.filter (fun s -> s.Stage <> ShaderStage.Pixel)
+
+            addProgram x
+            let handle = GL.CreateProgram()
+            GL.Check "could not create program"
+
+            for s in shaders do
+                GL.AttachShader(handle, s.Handle)
+                GL.Check "could not attach shader to program"
+
+            let program = 
+                ShaderCompiler.tryLinkProgram 
+                    handle 
+                    p.Code 
+                    shaders 
+                    0 
+                    Map.empty 
+                    (ShaderCompiler.setTransformFeedbackVaryings wantedSemantics)
+                    x
+            
+            match program with
+                | Success p -> Success { p with IsTransformFeedbackProgram = true }
+                | Error err -> Error err
 
         member x.CompileProgram(fboSignature : IFramebufferSignature, code : string) =
             match x.TryCompileProgram(fboSignature, code) with
@@ -732,11 +779,25 @@ module ProgramExtensions =
                 | Error e ->
                     failwithf "[GL] shader compiler returned errors: %s" e
 
+        member x.CompileTransformFeedbackProgram(wantedSemantics : list<Symbol>, p : Program) =
+            match x.TryCompileTransformFeedbackProgram(wantedSemantics, p) with
+                | Success p -> p
+                | Error e ->
+                    failwithf "[GL] shader compiler returned errors: %s" e
+
+
         member x.Delete(p : Program) =
             using x.ResourceLock (fun _ ->
                 removeProgram x
+
                 GL.DeleteProgram(p.Handle)
                 GL.Check "could not delete program"
+            )
+
+        member x.Delete(s : Shader) =
+            using x.ResourceLock (fun _ ->
+                GL.DeleteShader(s.Handle)
+                GL.Check "could not delete shader"
             )
 
 

@@ -396,3 +396,6 @@ type FShadeRuntimeExtensions private() =
             newPrep :> ISurface
         )
 
+module FShade =
+    let compose (e : list<FShadeEffect>) =
+        FShadeSurface(FShade.SequentialComposition.compose e) :> ISurface

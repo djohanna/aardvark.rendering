@@ -2780,9 +2780,37 @@ let main args =
             |> Sg.pass afterAfterMain
             |> Sg.effect [
                 VolumeShader.vertex |> toEffect
-                VolumeShader.thickOutline |> toEffect
-                DefaultSurfaces.constantColor (C4f(0.0,1.0,0.0,0.0)) |> toEffect
+                VolumeShader.outline |> toEffect
+                DefaultSurfaces.constantColor C4f.Red |> toEffect
             ]
+            |> Sg.uniform "LightLocation" viewPos
+            |> Sg.uniform "ViewportSize" ctrl.Sizes
+
+    let shadowOutlineTransform =
+        shadowOutline
+            |> Sg.viewTrafo (Mod.constant Trafo3d.Identity)
+            |> Sg.projTrafo (Mod.constant Trafo3d.Identity)
+
+    let buffer = app.Runtime.Context.CreateBuffer(4 <<< 20, BufferUsage.Dynamic)
+
+    let surface =
+        FShade.compose [
+            VolumeShader.vertex |> toEffect
+            VolumeShader.outline |> toEffect        
+        ]
+
+    let transformFeedback = 
+        app.Runtime.CompileTransformFeedback(
+            surface,
+            IndexedGeometryMode.LineList, 
+            [ DefaultSemantic.Positions ], 
+            Mod.constant { BackendConfiguration.Default with useDebugOutput = true }, 
+            shadowOutlineTransform.RenderObjects()
+        )
+
+    let stats = transformFeedback.Run(null, buffer, 0L, 4L <<< 20)
+
+    printfn "count: %.0f" stats.PrimitiveCount
 
     let shadows =
         Sg.group' [ 

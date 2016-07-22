@@ -55,13 +55,14 @@ module RenderTasks =
         let beforeRender = new System.Reactive.Subjects.Subject<unit>()
         let afterRender = new System.Reactive.Subjects.Subject<unit>()
 
+        member x.CurrentContext = currentContext
         member x.BeforeRender = beforeRender
         member x.AfterRender = afterRender
 
         member x.StructureChanged() =
             transact (fun () -> structureChanged.MarkOutdated())
 
-        member private x.pushDebugOutput() =
+        member internal x.pushDebugOutput() =
             let wasEnabled = GL.IsEnabled EnableCap.DebugOutput
             let c = config.GetValue x
             if c.useDebugOutput then
@@ -74,13 +75,13 @@ module RenderTasks =
 
             wasEnabled
 
-        member private x.popDebugOutput(wasEnabled : bool) =
+        member internal x.popDebugOutput(wasEnabled : bool) =
             let c = config.GetValue x
             if wasEnabled <> c.useDebugOutput then
                 if wasEnabled then GL.Enable EnableCap.DebugOutput
                 else GL.Disable EnableCap.DebugOutput
 
-        member private x.pushFbo (desc : OutputDescription) =
+        member internal x.pushFbo (desc : OutputDescription) =
             let fbo = desc.framebuffer |> unbox<Framebuffer>
             let old = Array.create 4 0
             let mutable oldFbo = 0
@@ -131,7 +132,7 @@ module RenderTasks =
 
             oldFbo, old
 
-        member private x.popFbo (desc : OutputDescription, (oldFbo : int, old : int[])) =
+        member internal x.popFbo (desc : OutputDescription, (oldFbo : int, old : int[])) =
             if ExecutionContext.framebuffersSupported then
                 GL.BindFramebuffer(OpenTK.Graphics.OpenGL4.FramebufferTarget.Framebuffer, oldFbo)
                 GL.Check "could not bind framebuffer"
@@ -144,7 +145,7 @@ module RenderTasks =
             GL.Viewport(old.[0], old.[1], old.[2], old.[3])
             GL.Check "could not set viewport"
 
-
+        abstract member Update : Framebuffer -> FrameStatistics
         abstract member Perform : Framebuffer -> FrameStatistics
         abstract member Release : unit -> unit
 
@@ -185,10 +186,11 @@ module RenderTasks =
 
                 let innerStats = 
                     renderTaskLock.Run (fun () -> 
+                        let ru = x.Update fbo
                         beforeRender.OnNext()
-                        let r = x.Perform fbo
+                        let rp = x.Perform fbo
                         afterRender.OnNext()
-                        r
+                        ru + rp
                     )
 
                 x.popFbo (desc, fboState)
@@ -241,14 +243,14 @@ module RenderTasks =
 
         member x.Parent = parent
 
-        abstract member Perform : unit -> FrameStatistics
+        abstract member Perform : Framebuffer -> FrameStatistics
         abstract member Dispose : unit -> unit
         abstract member Add : PreparedMultiRenderObject -> unit
         abstract member Remove : PreparedMultiRenderObject -> unit
 
 
-        member x.Run() =
-            let plain = x.Perform()
+        member x.Run(fbo : Framebuffer) =
+            let plain = x.Perform(fbo)
             lazy (
                 { plain with
                     RenderPassCount = 1.0
@@ -408,7 +410,7 @@ module RenderTasks =
                 hasProgram <- true
                 currentConfig <- config
 
-        override x.Perform() =
+        override x.Perform(fbo) =
             let config = parent.Config.GetValue parent
             reinit x config
 
@@ -416,7 +418,7 @@ module RenderTasks =
                 x.ProgramUpdate (fun () -> program.Update parent)
 
             let stats = 
-                x.Execution (fun () -> program.Run())
+                x.Execution (fun () -> program.Run(fbo))
 
             stats
                
@@ -603,7 +605,7 @@ module RenderTasks =
                 else first <- last
             )
 
-        override x.Run() =
+        override x.Run(fbo) =
             
             if disposeCnt > 0 then
                 failwithf "Running disposed glvmprogram"
@@ -658,8 +660,8 @@ module RenderTasks =
                 arr <- reader.Content |> Seq.sortWith (fun a b -> cmp.Compare(a,b)) |> Seq.toArray
             )
 
-        override x.Run() =
-            Interpreter.run (fun gl ->
+        override x.Run(fbo) =
+            Interpreter.run fbo (fun gl ->
                 for a in arr do gl.render a
 
                 { FrameStatistics.Zero with
@@ -724,7 +726,7 @@ module RenderTasks =
 
         member x.Scope = scope
 
-        override x.Perform() =
+        override x.Perform(fbo) =
             let cfg = parent.Config.GetValue parent
             reinit x cfg
 
@@ -732,7 +734,7 @@ module RenderTasks =
                 x.ProgramUpdate (fun () -> program.Update parent)
 
             let stats = 
-                x.Execution (fun () -> program.Run())
+                x.Execution (fun () -> program.Run(fbo))
 
             stats
 
@@ -870,7 +872,6 @@ module RenderTasks =
         
         let primitivesGenerated = OpenGlQuery(QueryTarget.PrimitivesGenerated)
 
-
         let add (ro : PreparedRenderObject) = 
             let all = ro.Resources |> Seq.toList
             for r in all do resources.Add r
@@ -888,22 +889,8 @@ module RenderTasks =
             ro
 
         let rec prepareRenderObject (ro : IRenderObject) =
-            match ro with
-                | :? RenderObject as r ->
-                    new PreparedMultiRenderObject([this.ResourceManager.Prepare(fboSignature, r) |> add])
-
-                | :? PreparedRenderObject as prep ->
-                    new PreparedMultiRenderObject([prep |> PreparedRenderObject.clone |> add])
-
-                | :? MultiRenderObject as seq ->
-                    let all = seq.Children |> List.collect(fun o -> (prepareRenderObject o).Children)
-                    new PreparedMultiRenderObject(all)
-
-                | :? PreparedMultiRenderObject as seq ->
-                    new PreparedMultiRenderObject (seq.Children |> List.map (PreparedRenderObject.clone >> add))
-
-                | _ ->
-                    failwithf "[RenderTask] unsupported IRenderObject: %A" ro
+            let res = this.ResourceManager.Prepare(fboSignature, ro)
+            new PreparedMultiRenderObject(res.Children |> List.map add)
 
         let preparedObjects = objects |> ASet.mapUse prepareRenderObject
         let preparedObjectReader = preparedObjects.GetReader()
@@ -925,9 +912,7 @@ module RenderTasks =
                     subtasks <- Map.add pass task subtasks
                     task
 
-
-
-        override x.Perform(fbo : Framebuffer) =
+        override x.Update(fbo : Framebuffer) =
             let mutable stats = FrameStatistics.Zero
             let deltas = preparedObjectReader.GetDelta x
 
@@ -950,44 +935,45 @@ module RenderTasks =
                         let task = getSubTask v.RenderPass
                         task.Remove v
 
+            stats   
+
+        member internal x.PerformInternal(fbo : Framebuffer) =
+
 
             let mutable current = 0
             let mutable query =  0 //GL.GenQuery()
 
             
             primitivesGenerated.Restart()
-//
-//            GL.GetQuery(QueryTarget.PrimitivesGenerated, GetQueryParam.CurrentQuery, &current)
-//            if current = 0 then
-//                query <- GL.GenQuery()
-//                GL.BeginQuery(QueryTarget.PrimitivesGenerated, query)
+
 
             let mutable runStats = []
             for (_,t) in Map.toSeq subtasks do
-                let s = t.Run()
+                let s = t.Run(fbo)
                 runStats <- s::runStats
-//
-//            if current = 0 then
-//                GL.EndQuery(QueryTarget.PrimitivesGenerated)
 
             primitivesGenerated.Stop()
-            GL.Sync()
+
+            lazy (
+                GL.Sync()
             
-            let mutable primitives = primitivesGenerated.Value
-//            if current = 0 then
-//                GL.GetQueryObject(query, GetQueryObjectParam.QueryResult, &primitives)
-//                GL.DeleteQuery(query)
+                let mutable primitives = primitivesGenerated.Value
+    //            if current = 0 then
+    //                GL.GetQueryObject(query, GetQueryObjectParam.QueryResult, &primitives)
+    //                GL.DeleteQuery(query)
+            
+                !this.Scope.stats + 
+                (runStats |> List.sumBy (fun l -> l.Value)) +
+                callStats.GetValue() +
+                { FrameStatistics.Zero with
+                    ResourceUpdateSubmissionTime = resourceUpdateWatch.ElapsedCPU
+                    ResourceUpdateTime = resourceUpdateWatch.ElapsedGPU
+                    PrimitiveCount = float primitives
+                }
+            )
 
-            stats + 
-            !this.Scope.stats + 
-            (runStats |> List.sumBy (fun l -> l.Value)) +
-            callStats.GetValue() +
-            { FrameStatistics.Zero with
-                ResourceUpdateSubmissionTime = resourceUpdateWatch.ElapsedCPU
-                ResourceUpdateTime = resourceUpdateWatch.ElapsedGPU
-                PrimitiveCount = float primitives
-            }
-
+        override x.Perform(fbo) =
+            x.PerformInternal(fbo).Value
 
         override x.Release() =
             preparedObjectReader.Dispose()
@@ -996,7 +982,6 @@ module RenderTasks =
                 t.Dispose()
 
             subtasks <- Map.empty
-
 
     type ClearTask(runtime : IRuntime, fboSignature : IFramebufferSignature, color : IMod<list<Option<C4f>>>, depth : IMod<Option<float>>, ctx : Context) =
         inherit AdaptiveObject()
@@ -1093,3 +1078,84 @@ module RenderTasks =
                 x.Dispose()
 
             member x.FrameId = frameId
+
+
+    type TransformFeedbackRenderTask(man : ResourceManager, program : Program, wantedSemantics : list<Symbol>, mode : IndexedGeometryMode, objects : aset<IRenderObject>, config : IMod<BackendConfiguration>, shareTextures : bool, shareBuffers : bool) =
+        inherit RenderTask(man, TransformFeedbackSignature(man.Context.Runtime, program, mode, wantedSemantics), objects, config, shareTextures, shareBuffers)
+        let ctx = man.Context
+
+        let fbo = Framebuffer.EmptyWithSignature base.FramebufferSignature
+
+        let primitiveType =
+            match mode with
+                | IndexedGeometryMode.PointList -> 
+                    TransformFeedbackPrimitiveType.Points 
+
+                | IndexedGeometryMode.LineList | IndexedGeometryMode.LineStrip ->
+                    TransformFeedbackPrimitiveType.Lines
+
+                | IndexedGeometryMode.TriangleList | IndexedGeometryMode.TriangleStrip ->
+                    TransformFeedbackPrimitiveType.Triangles
+
+                | _ ->
+                    failwithf "[GL] unsupported TransformFeedback primitive type: %A" mode
+
+        let primitivesWritten = OpenGlQuery(QueryTarget.TransformFeedbackPrimitivesWritten)
+
+
+        member x.Run (caller : IAdaptiveObject, buffer : Aardvark.Rendering.GL.Buffer, offset : int64, size : int64) =
+            x.EvaluateAlways caller (fun () ->
+                x.OutOfDate <- true
+
+                use token = ctx.ResourceLock 
+                if x.CurrentContext.UnsafeCache <> ctx.CurrentContextHandle.Value then
+                    transact (fun () -> Mod.change x.CurrentContext ctx.CurrentContextHandle.Value)
+
+                let debugState = x.pushDebugOutput()
+
+                let innerStats = 
+                    x.RenderTaskLock.Run (fun () -> 
+                        
+                        let su = x.Update fbo
+                        
+                        GL.UseProgram(program.Handle)
+                        GL.BindBufferRange(BufferRangeTarget.TransformFeedbackBuffer, 0, buffer.Handle, nativeint offset, nativeint size)
+                        GL.Enable(EnableCap.RasterizerDiscard)
+
+                        primitivesWritten.Restart()
+                        GL.BeginTransformFeedback(primitiveType)
+
+       
+                        let sp = x.Perform fbo
+                        
+
+                        GL.EndTransformFeedback()
+                        primitivesWritten.Stop()
+                        GL.Disable(EnableCap.RasterizerDiscard)
+                        GL.BindBufferBase(BufferRangeTarget.TransformFeedbackBuffer, 0, 0)
+                        GL.UseProgram(0)
+                        GL.Sync()
+
+                        let cnt = primitivesWritten.Value
+                        printfn "%A" cnt
+
+                        { (su + sp) with PrimitiveCount = float cnt }
+                    )
+
+                x.popDebugOutput debugState
+
+                
+
+                GL.BindVertexArray 0
+                GL.BindBuffer(BufferTarget.DrawIndirectBuffer,0)
+            
+                innerStats + !x.Scope.stats
+            )
+
+        member x.Mode = mode
+        member x.WantedSemantics = wantedSemantics
+
+        interface ITransformFeedbackRenderTask with
+            member x.Run(caller, buffer, offset, size) = x.Run(caller, unbox buffer, offset, size)
+            member x.Mode = mode
+            member x.WantedSemantics = wantedSemantics

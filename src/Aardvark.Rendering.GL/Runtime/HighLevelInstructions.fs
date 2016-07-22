@@ -17,6 +17,26 @@ module Instructions =
     let setStencilMask (active : bool) =
         Instruction.StencilMask(if active then 0b11111111111111111111111111111111 else 0)
 
+    let beginTransformFeedback (mode : IndexedGeometryMode) =
+        let primitiveType =
+            match mode with
+                | IndexedGeometryMode.PointList -> 
+                    TransformFeedbackPrimitiveType.Points |> int
+
+                | IndexedGeometryMode.LineList | IndexedGeometryMode.LineStrip ->
+                    TransformFeedbackPrimitiveType.Lines |> int
+
+                | IndexedGeometryMode.TriangleList | IndexedGeometryMode.TriangleStrip ->
+                    TransformFeedbackPrimitiveType.Triangles |> int
+
+                | _ ->
+                    failwithf "[GL] unsupported TransformFeedback primitive type: %A" mode
+
+        Instruction.BeginTransformFeedback primitiveType
+
+    let endTransformFeedback = Instruction.EndTransformFeedback
+    let pauseTransformFeedback = Instruction.PauseTransformFeedback
+    let resumeTransformFeedback = Instruction.ResumeTransformFeedback
 
     let setColorMasks (masks : list<V4i>) =
         masks |> List.mapi (fun i mask ->
