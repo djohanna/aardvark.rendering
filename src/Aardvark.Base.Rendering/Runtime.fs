@@ -67,6 +67,7 @@ type IRuntime =
 
     abstract member CompileClear : fboSignature : IFramebufferSignature * clearColors : IMod<Map<Symbol, C4f>> * clearDepth : IMod<Option<double>> -> IRenderTask
     abstract member CompileRender : fboSignature : IFramebufferSignature * BackendConfiguration * aset<IRenderObject> -> IRenderTask
+    abstract member CompileTransformFeedback : surface : ISurface * mode : IndexedGeometryMode * wanted : list<Symbol> * config : BackendConfiguration * objects : aset<IRenderObject> -> ITransformFeedbackRenderTask
     
     abstract member GenerateMipMaps : IBackendTexture -> unit
     abstract member ResolveMultisamples : IFramebufferOutput * IBackendTexture * ImageTrafo -> unit
@@ -86,6 +87,7 @@ and IRenderTask =
 and ITransformFeedbackRenderTask =
     inherit IDisposable
     inherit IAdaptiveObject
+    abstract member Surface : IBackendSurface
     abstract member WantedSemantics : list<Symbol>
     abstract member Mode : IndexedGeometryMode
     abstract member Run : IAdaptiveObject * IBackendBuffer * int64 * int64 -> FrameStatistics

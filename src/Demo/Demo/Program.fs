@@ -2734,8 +2734,8 @@ let main args =
         )
 
     let afterMain = RenderPass.after "bla" RenderPassOrder.Arbitrary RenderPass.main
-    let afterAfterMain = RenderPass.after "blubb" RenderPassOrder.Arbitrary afterMain
-    let final = RenderPass.after "blubber" RenderPassOrder.Arbitrary afterAfterMain
+    let final = RenderPass.after "blubber" RenderPassOrder.Arbitrary afterMain
+    let afterFinal = RenderPass.after "blubber2" RenderPassOrder.Arbitrary final
     
     let debug = Mod.init false
 
@@ -2761,65 +2761,67 @@ let main args =
             |> Sg.index index
             |> Sg.vertexAttribute DefaultSemantic.Positions positions
 
-    let shadowVolumes =
-        shadowGeometry
-            |> Sg.stencilMode (Mod.constant writeStencil)
-            |> Sg.writeBuffers' (Set.ofList [ DefaultSemantic.Stencil ])
-            |> Sg.pass afterMain
-            |> Sg.effect [
+    let buildOutline = 
+        let surface = 
+            FShade.compose [
                 VolumeShader.vertex |> toEffect
-                VolumeShader.extrude |> toEffect
-                DefaultSurfaces.constantColor (C4f(1.0,0.0,0.0,0.0)) |> toEffect
+                VolumeShader.outline |> toEffect        
             ]
 
-    let shadowOutline =
+        let config = { BackendConfiguration.Default with useDebugOutput = true }
+
         shadowGeometry
             |> Sg.writeBuffers' (Set.ofList [ DefaultSemantic.Colors ])
             |> Sg.depthTest (Mod.constant DepthTestMode.None)
-            |> Sg.onOff debug
-            |> Sg.pass afterAfterMain
-            |> Sg.effect [
-                VolumeShader.vertex |> toEffect
-                VolumeShader.outline |> toEffect
-                DefaultSurfaces.constantColor C4f.Red |> toEffect
-            ]
             |> Sg.uniform "LightLocation" viewPos
             |> Sg.uniform "ViewportSize" ctrl.Sizes
-
-    let shadowOutlineTransform =
-        shadowOutline
             |> Sg.viewTrafo (Mod.constant Trafo3d.Identity)
             |> Sg.projTrafo (Mod.constant Trafo3d.Identity)
+            |> Sg.compileTransformFeedback' app.Runtime surface IndexedGeometryMode.LineList [ DefaultSemantic.Positions ] config
 
-    let buffer = app.Runtime.Context.CreateBuffer(4 <<< 20, BufferUsage.Dynamic)
+    let outlineBuffer = app.Runtime.Context.CreateBuffer(4 <<< 20, BufferUsage.Dynamic)
 
-    let surface =
-        FShade.compose [
-            VolumeShader.vertex |> toEffect
-            VolumeShader.outline |> toEffect        
-        ]
+    let outlineGeometry =
+        let lines =
+            Mod.custom (fun self ->
+                let stats = buildOutline.Run(self, outlineBuffer, 0L, int64 outlineBuffer.SizeInBytes)
+                outlineBuffer, int stats.PrimitiveCount
+            )
 
-    let transformFeedback = 
-        app.Runtime.CompileTransformFeedback(
-            surface,
-            IndexedGeometryMode.LineList, 
-            [ DefaultSemantic.Positions ], 
-            Mod.constant { BackendConfiguration.Default with useDebugOutput = true }, 
-            shadowOutlineTransform.RenderObjects()
-        )
+        let call = lines |> Mod.map (fun (_,count) -> DrawCallInfo(FaceVertexCount = 2 * count, InstanceCount = 1))
+        let buffer = lines |> Mod.map (fun (b,_) -> b :> IBuffer)
+        let view = BufferView(buffer, typeof<V4f>)
 
-    let stats = transformFeedback.Run(null, buffer, 0L, 4L <<< 20)
+        Sg.RenderNode(call, Mod.constant IndexedGeometryMode.LineList)
+            |> Sg.vertexBuffer DefaultSemantic.Positions view
 
-    printfn "count: %.0f" stats.PrimitiveCount
 
     let shadows =
         Sg.group' [ 
 
             let color = C4f(0.0,0.0,0.0,0.0)
 
-            yield shadowVolumes
+            yield
+                shadowGeometry
+                    |> Sg.stencilMode (Mod.constant writeStencil)
+                    |> Sg.writeBuffers' (Set.ofList [ DefaultSemantic.Stencil ])
+                    |> Sg.pass afterMain
+                    |> Sg.effect [
+                        VolumeShader.vertex |> toEffect
+                        VolumeShader.extrude |> toEffect
+                        DefaultSurfaces.constantColor (C4f(1.0,0.0,0.0,0.0)) |> toEffect
+                    ]
 
-            yield shadowOutline
+            yield
+                outlineGeometry
+                    |> Sg.pass afterFinal
+                    |> Sg.depthTest (Mod.constant DepthTestMode.None)
+                    |> Sg.uniform "LineWidth" (Mod.constant 5.0)
+                    |> Sg.effect [
+                        DefaultSurfaces.trafo |> toEffect
+                        DefaultSurfaces.thickLine |> toEffect
+                        DefaultSurfaces.constantColor C4f.Red |> toEffect
+                    ]
 
             yield
                 Sg.fullScreenQuad
@@ -2859,11 +2861,8 @@ let main args =
         )
     )
 
-    use task = 
-        RenderTask.ofList [
-            //app.Runtime.CompileClear(ctrl.FramebufferSignature, Mod.constant C4f.Black, Mod.constant 1.0)
-            app.Runtime.CompileRender(ctrl.FramebufferSignature, sg)
-        ]
+    let config = { BackendConfiguration.Default with useDebugOutput = true }
+    use task = app.Runtime.CompileRender(ctrl.FramebufferSignature, config, sg)
 
     ctrl.RenderTask <- task |> DefaultOverlays.withStatistics
 

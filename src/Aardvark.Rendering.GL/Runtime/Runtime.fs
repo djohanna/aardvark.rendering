@@ -56,7 +56,8 @@ type Runtime(ctx : Context, shareTextures : bool, shareBuffers : bool) =
         member x.ContextLock = ctx.ResourceLock
         member x.CompileRender (signature, engine : BackendConfiguration, set : aset<IRenderObject>) = x.CompileRender(signature, engine,set)
         member x.CompileClear(signature, color, depth) = x.CompileClear(signature, color, depth)
-      
+        member x.CompileTransformFeedback (surface : ISurface, mode : IndexedGeometryMode, wanted : list<Symbol>, engine : BackendConfiguration, set : aset<IRenderObject>) = x.CompileTransformFeedback(surface, mode, wanted, Mod.constant engine, set)
+
         member x.PrepareSurface (signature, s : ISurface) = x.PrepareSurface(signature, s) :> IBackendSurface
         member x.DeleteSurface (s : IBackendSurface) = 
             match s with

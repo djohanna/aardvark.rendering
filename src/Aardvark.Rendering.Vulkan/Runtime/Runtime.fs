@@ -156,7 +156,7 @@ type Runtime(device : Device) as this =
         member x.PrepareRenderObject(fboSig, ro) = x.PrepareRenderObject(fboSig, ro)
         member x.CompileClear(fboSig, col, depth) = x.CompileClear(fboSig, col, depth)
         member x.CompileRender(fboSig, config, ros) = x.CompileRender(fboSig, config, ros)
-
+        member x.CompileTransformFeedback (surface : ISurface, mode : IndexedGeometryMode, wanted : list<Symbol>, engine : BackendConfiguration, set : aset<IRenderObject>) = failwith ""
 
         // framebuffer signatures
 

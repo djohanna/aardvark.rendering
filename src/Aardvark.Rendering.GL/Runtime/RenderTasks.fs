@@ -145,6 +145,10 @@ module RenderTasks =
             GL.Viewport(old.[0], old.[1], old.[2], old.[3])
             GL.Check "could not set viewport"
 
+        member internal x.incrementFrameId() =
+            frameId <- frameId + 1UL
+            
+
         abstract member Update : Framebuffer -> FrameStatistics
         abstract member Perform : Framebuffer -> FrameStatistics
         abstract member Release : unit -> unit
@@ -182,18 +186,21 @@ module RenderTasks =
 
 
                 let debugState = x.pushDebugOutput()
-                let fboState = x.pushFbo desc
+                
 
                 let innerStats = 
                     renderTaskLock.Run (fun () -> 
                         let ru = x.Update fbo
+
+                        let fboState = x.pushFbo desc
                         beforeRender.OnNext()
                         let rp = x.Perform fbo
                         afterRender.OnNext()
+                        x.popFbo (desc, fboState)
+
                         ru + rp
                     )
 
-                x.popFbo (desc, fboState)
                 x.popDebugOutput debugState
 
                 
@@ -937,13 +944,7 @@ module RenderTasks =
 
             stats   
 
-        member internal x.PerformInternal(fbo : Framebuffer) =
-
-
-            let mutable current = 0
-            let mutable query =  0 //GL.GenQuery()
-
-            
+        override x.Perform(fbo) =
             primitivesGenerated.Restart()
 
 
@@ -954,26 +955,17 @@ module RenderTasks =
 
             primitivesGenerated.Stop()
 
-            lazy (
-                GL.Sync()
+            GL.Sync()
             
-                let mutable primitives = primitivesGenerated.Value
-    //            if current = 0 then
-    //                GL.GetQueryObject(query, GetQueryObjectParam.QueryResult, &primitives)
-    //                GL.DeleteQuery(query)
-            
-                !this.Scope.stats + 
-                (runStats |> List.sumBy (fun l -> l.Value)) +
-                callStats.GetValue() +
-                { FrameStatistics.Zero with
-                    ResourceUpdateSubmissionTime = resourceUpdateWatch.ElapsedCPU
-                    ResourceUpdateTime = resourceUpdateWatch.ElapsedGPU
-                    PrimitiveCount = float primitives
-                }
-            )
-
-        override x.Perform(fbo) =
-            x.PerformInternal(fbo).Value
+            let primitives = primitivesGenerated.Value
+            !this.Scope.stats + 
+            (runStats |> List.sumBy (fun l -> l.Value)) +
+            callStats.GetValue() +
+            { FrameStatistics.Zero with
+                ResourceUpdateSubmissionTime = resourceUpdateWatch.ElapsedCPU
+                ResourceUpdateTime = resourceUpdateWatch.ElapsedGPU
+                PrimitiveCount = float primitives
+            }
 
         override x.Release() =
             preparedObjectReader.Dispose()
@@ -1102,7 +1094,6 @@ module RenderTasks =
 
         let primitivesWritten = OpenGlQuery(QueryTarget.TransformFeedbackPrimitivesWritten)
 
-
         member x.Run (caller : IAdaptiveObject, buffer : Aardvark.Rendering.GL.Buffer, offset : int64, size : int64) =
             x.EvaluateAlways caller (fun () ->
                 x.OutOfDate <- true
@@ -1118,44 +1109,71 @@ module RenderTasks =
                         
                         let su = x.Update fbo
                         
-                        GL.UseProgram(program.Handle)
-                        GL.BindBufferRange(BufferRangeTarget.TransformFeedbackBuffer, 0, buffer.Handle, nativeint offset, nativeint size)
+                        // discard all primitives before rasterization
                         GL.Enable(EnableCap.RasterizerDiscard)
+                        GL.Check "could not enable RasterizerDiscard"
 
+                        let oldProgram = GL.GetInteger(GetPName.CurrentProgram)
+
+                        // bind the desired program
+                        GL.UseProgram(program.Handle)
+                        GL.Check "could not use program"
+           
+                        // bind the feedback buffer
+                        GL.BindBufferRange(BufferRangeTarget.TransformFeedbackBuffer, 0, buffer.Handle, nativeint offset, nativeint size)
+                        GL.Check "could not bind buffer"
+
+                        // start the feedback process
                         primitivesWritten.Restart()
-                        GL.BeginTransformFeedback(primitiveType)
+                        GL.BeginTransformFeedback(primitiveType); GL.Check "could not start TransformFeedback"
 
-       
+                        // run the render-commands
                         let sp = x.Perform fbo
+
+                        // stop the feedback process
+                        GL.EndTransformFeedback(); GL.Check "could stop TransformFeedback"
+                        primitivesWritten.Stop()
+
+                        // unbind the feedback buffer
+                        GL.BindBufferBase(BufferRangeTarget.TransformFeedbackBuffer, 0, 0)
+                        GL.Check "could not unbind buffer"
+
+
+                        // re-enable rasterization
+                        GL.Disable(EnableCap.RasterizerDiscard)
+                        GL.Check "could not disable RasterizerDiscard"
+
+                        // unbind the program
+                        GL.UseProgram(oldProgram)
+                        GL.Check "could not unbind program"
                         
 
-                        GL.EndTransformFeedback()
-                        primitivesWritten.Stop()
-                        GL.Disable(EnableCap.RasterizerDiscard)
-                        GL.BindBufferBase(BufferRangeTarget.TransformFeedbackBuffer, 0, 0)
-                        GL.UseProgram(0)
+                        // sync in order to get the feedback count
                         GL.Sync()
 
-                        let cnt = primitivesWritten.Value
-                        printfn "%A" cnt
 
+                        let cnt = primitivesWritten.Value
                         { (su + sp) with PrimitiveCount = float cnt }
                     )
 
                 x.popDebugOutput debugState
 
                 
+                x.incrementFrameId()
 
-                GL.BindVertexArray 0
-                GL.BindBuffer(BufferTarget.DrawIndirectBuffer,0)
-            
                 innerStats + !x.Scope.stats
             )
 
         member x.Mode = mode
         member x.WantedSemantics = wantedSemantics
 
+        override x.Release() =
+            base.Release()
+            primitivesWritten.Reset()
+            ctx.Delete(program)
+
         interface ITransformFeedbackRenderTask with
+            member x.Surface = program :> IBackendSurface
             member x.Run(caller, buffer, offset, size) = x.Run(caller, unbox buffer, offset, size)
             member x.Mode = mode
             member x.WantedSemantics = wantedSemantics

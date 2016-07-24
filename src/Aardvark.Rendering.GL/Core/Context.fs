@@ -216,6 +216,8 @@ type Context(runtime : IRuntime, resourceContextCount : int) =
                     nopDisposable
 
                 else
+
+
                     // if the current token is using a different context
                     // simply release it before obtaining the new token
                     // and obtain it again after releasing this one.
@@ -293,6 +295,17 @@ type Context(runtime : IRuntime, resourceContextCount : int) =
                         currentToken.Value <- None)
                 ) :> _
 
+    member x.EnableDebugOutput() =
+        for ch in resourceContexts do
+            try
+                ch.MakeCurrent()
+                let wasEnabled = GL.IsEnabled EnableCap.DebugOutput
+                match ContextHandle.Current with
+                    | Some v -> v.AttachDebugOutputIfNeeded()
+                    | None -> Report.Warn("No active context handle in RenderTask.Run")
+                GL.Enable EnableCap.DebugOutput
+            finally
+                ch.ReleaseCurrent()
 
     /// <summary>
     /// releases all resources created by the context

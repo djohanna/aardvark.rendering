@@ -539,16 +539,16 @@ module ProgramExtensions =
                             let name = builder.ToString()
 
                             let mutable prop = ProgramProperty.Type
-                            let _,p = GL.GetProgramResource(p, ProgramInterface.ProgramOutput, i, 1, &prop, 1)
+                            let _,ot = GL.GetProgramResource(p, ProgramInterface.ProgramOutput, i, 1, &prop, 1)
                             GL.Check "could not get program resource"
-                            let outputType = p |> unbox<ActiveAttribType>
+                            let outputType = ot |> unbox<ActiveAttribType>
 
                             let mutable prop = ProgramProperty.ArraySize
                             let _,size = GL.GetProgramResource(p, ProgramInterface.ProgramOutput, i, 1, &prop, 1)
                             GL.Check "could not get program resource"
 
 
-                            let attrib = { attributeIndex = i; size = 1; name = name; semantic = name; attributeType = outputType }
+                            let attrib = { attributeIndex = i; size = size; name = name; semantic = name; attributeType = outputType }
                             Log.line "found: %A" attrib
                             yield attrib
 
@@ -586,7 +586,7 @@ module ProgramExtensions =
                             |> List.map (fun o -> o.name)
                             |> List.toArray
 
-                    GL.TransformFeedbackVaryings(p, varyings.Length, varyings, TransformFeedbackMode.InterleavedAttribs)
+                    GL.TransformFeedbackVaryings(p, varyings.Length, varyings, TransformFeedbackMode.SeparateAttribs)
                     GL.Check "could not set feedback varyings"
 
                     outputs
@@ -600,15 +600,15 @@ module ProgramExtensions =
             GL.LinkProgram(handle)
             GL.Check "could not link program"
 
-         
             let status = GL.GetProgram(handle, GetProgramParameterName.LinkStatus)
+            GL.Check "could not get program link status"
             let log = GL.GetProgramInfoLog(handle)
             GL.Check "could not get program log"
 
 
             if status = 1 then
                 let outputs = findOutputs handle x
-
+ 
                 // after modifying the frag-locations the program needs to be linked again
                 GL.LinkProgram(handle)
                 GL.Check "could not link program"
