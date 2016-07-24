@@ -149,22 +149,33 @@ module DeltaCompiler =
             let textures = s.info.structuralChange |> Mod.map (fun () -> !s.info.usedTextureSlots)
             let ubos = s.info.structuralChange |> Mod.map (fun () -> !s.info.usedUniformBufferSlots)
 
-            match prev with
-                | Some prev ->
-                    if not prev.Last.DepthBufferMask then
-                        yield Instruction.DepthMask 1
+            let isTransformFeedback =
+                match prev with
+                    | Some prev -> 
+                        match prev.Last.FramebufferSignature with
+                            | :? TransformFeedbackSignature as f -> true
+                            | _ -> false
+                    | _ ->
+                        false
 
-                    if not prev.Last.StencilBufferMask then
-                        yield Instruction.StencilMask 0xFFFFFFFF
+            if not isTransformFeedback then
+                match prev with
+                    | Some prev ->
 
-                    if Option.isSome prev.Last.DrawBuffers then
+                        if not prev.Last.DepthBufferMask then
+                            yield Instruction.DepthMask 1
+
+                        if not prev.Last.StencilBufferMask then
+                            yield Instruction.StencilMask 0xFFFFFFFF
+
+                        if Option.isSome prev.Last.DrawBuffers then
+                            let! s = compilerState
+                            yield Instruction.DrawBuffers s.info.drawBufferCount s.info.drawBuffers
+                    | _ ->
                         let! s = compilerState
+                        yield Instruction.DepthMask 1
+                        yield Instruction.StencilMask 0xFFFFFFFF
                         yield Instruction.DrawBuffers s.info.drawBufferCount s.info.drawBuffers
-                | _ ->
-                    let! s = compilerState
-                    yield Instruction.DepthMask 1
-                    yield Instruction.StencilMask 0xFFFFFFFF
-                    yield Instruction.DrawBuffers s.info.drawBufferCount s.info.drawBuffers
 
             yield
                 textures |> Mod.map (fun textures ->

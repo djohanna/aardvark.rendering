@@ -2814,6 +2814,7 @@ let main args =
 
             yield
                 outlineGeometry
+                    |> Sg.writeBuffers' (Set.ofList [ DefaultSemantic.Colors ])
                     |> Sg.pass afterFinal
                     |> Sg.depthTest (Mod.constant DepthTestMode.None)
                     |> Sg.uniform "LineWidth" (Mod.constant 5.0)
