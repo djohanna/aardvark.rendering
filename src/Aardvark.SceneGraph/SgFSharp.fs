@@ -14,8 +14,15 @@ open Aardvark.Base.Incremental
 #nowarn "9"
 #nowarn "51"
 
+module ``Sg FSharp Helpers`` =
+    type SgASetBuilder() =
+        inherit ASetBuilder()
+        member x.Run(s : aset<ISg>) = Sg.Set(s) :> ISg
+   
+
 [<AutoOpen>]
 module SgFSharp =
+    open ``Sg FSharp Helpers``
 
     module Sg =
 
@@ -66,6 +73,10 @@ module SgFSharp =
 
         let ofArray (arr : array<#ISg>) =
             arr |> ofSeq
+
+
+
+        let aset = SgASetBuilder()
 
 
 

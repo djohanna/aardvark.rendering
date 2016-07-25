@@ -879,7 +879,7 @@ module RenderTask =
         (Map.find DefaultSemantic.Depth map, Map.find DefaultSemantic.Stencil map)
 
     let renderToColorAndDepth (size : IMod<V2i>) (task : IRenderTask) =
-        let map = task |> renderSemantics (Set.singleton DefaultSemantic.Depth) size
+        let map = task |> renderSemantics (Set.ofList [ DefaultSemantic.Colors; DefaultSemantic.Depth ]) size
         (Map.find DefaultSemantic.Colors map, Map.find DefaultSemantic.Depth map)
 
     let log fmt =

@@ -2257,6 +2257,7 @@ module VolumeShader =
             [<Semantic "Inf">]          inf     : V4d
             [<WorldPosition>]           wp      : V4d
             [<Semantic "Light">]        l       : V3d
+            [<PrimitiveId>]             id      : int
         }
 
     type SimpleVertex = 
@@ -2265,7 +2266,9 @@ module VolumeShader =
         }
 
     type UniformScope with
-        member x.LightPos : V3d = uniform?LightPos
+        member x.LightRadius : float = uniform?PerLight?LightRadius
+        member x.LightDirection : V3d = uniform?PerLight?LightDirection
+
 
     let isOutlineEdge (light : V3d) (p0 : V3d) (p1 : V3d) (inside : V3d) (test : V3d) =
         let line = Vec.normalize (p1 - p0)
@@ -2293,18 +2296,165 @@ module VolumeShader =
 
         (p0n - d0 - n0), (p1n + d1 - n1), (p0n - d0 + n0), (p1n + d1 + n1)
 
+
+    let cutPlane (p : V4d) (p0 : V4d) (p1 : V4d) (dc : V3d) (df : V3d) =
+        let u = p1.XYZ - p0.XYZ |> Vec.normalize
+
+        let n0 = Vec.cross u dc |> Vec.normalize
+        let n1 = Vec.cross u df |> Vec.normalize
+
+
+
+        ()
+
+
+
+    let topAndBottom (w0 : V4d) (w1 : V4d) =
+        let l = uniform.LightLocation
+        let d = uniform.LightDirection |> Vec.normalize
+        let r = uniform.LightRadius
+
+        let u = w1.XYZ - w0.XYZ |> Vec.normalize
+        let lightPlane = Vec.cross u d |> Vec.normalize
+
+        let topWorld         = V4d(l + r * lightPlane, 1.0)
+        let bottomWorld      = V4d(l - r * lightPlane, 1.0)
+
+        let p0 = uniform.ViewProjTrafo * w0
+        let p1 = uniform.ViewProjTrafo * w1
+        let top = uniform.ViewProjTrafo * topWorld
+        let bottom = uniform.ViewProjTrafo * bottomWorld
+
+
+        (p0, p1, top, bottom)
+
+//        let t0 = p0 - top
+//        let b0 = p0 - bottom
+//        let t1 = p1 - top
+//        let b1 = p1 - bottom
+        
+
+
+
+
+    let wedge (v : Line<Vertex>) =
+        triangle {
+            let (p0, p1, top, bottom) = topAndBottom v.P0.pos v.P1.pos
+
+            let t0 = p0 - top
+            let b0 = p0 - bottom
+            let t1 = p1 - top
+            let b1 = p1 - bottom
+
+
+
+            // triangle faces
+            yield { p = p0 }
+            yield { p = t0 }
+            yield { p = b0 }
+            restartStrip()
+
+            yield { p = p1 }
+            yield { p = t1 }
+            yield { p = b1 }
+            restartStrip()
+
+            // far cap
+            yield { p = b0 }
+            yield { p = t0 }
+            yield { p = b1 }
+            yield { p = t1 }
+            restartStrip()
+
+            // quad faces
+            yield { p = p0 }
+            yield { p = p1 }
+            yield { p = b0 }
+            yield { p = b1 }
+            restartStrip()
+
+            yield { p = p0 }
+            yield { p = p1 }
+            yield { p = t0 }
+            yield { p = t1 }
+            restartStrip()
+
+
+            ()
+
+        }
+
+    let sides (a : Line<Vertex>) =
+        triangle {
+
+//            let (p0, p1, top, bottom) = topAndBottom a.P0.pos a.P1.pos
+//
+//            let b0 = p0 - bottom
+//            let b1 = p1 - bottom
+//
+//            yield { p = p0 }
+//            yield { p = p1 }
+//            yield { p = b0 }
+//            yield { p = b1 }
+
+            yield { p = a.P0.pos }
+            yield { p = a.P1.pos }
+            yield { p = a.P0.inf }
+            yield { p = a.P1.inf }
+        }
+
+    let frontAndBackCap (a : TriangleAdjacency<Vertex>) =
+        triangle {
+            let u = a.P1.inf - a.P0.inf |> Vec.xyz
+            let v = a.P2.inf - a.P0.inf |> Vec.xyz
+            let n = Vec.cross u v |> Vec.normalize
+            let h = Vec.dot n a.P0.inf.XYZ
+            let ff = h > 0.0
+
+            let p0n = a.P0.pos + V4d(0.0,0.0,0.0001,0.0)
+            let p1n = a.P1.pos + V4d(0.0,0.0,0.0001,0.0)
+            let p2n = a.P2.pos + V4d(0.0,0.0,0.0001,0.0)
+                    
+            let light = a.P0.l
+
+            if ff then
+                yield { p = p0n }
+                yield { p = p1n }
+                yield { p = p2n }
+                restartStrip()
+                yield { p = a.P0.inf }
+                yield { p = a.P2.inf }
+                yield { p = a.P1.inf }
+                restartStrip()
+            else
+                yield { p = p0n }
+                yield { p = p2n }
+                yield { p = p1n }
+                restartStrip()
+                yield { p = a.P0.inf }
+                yield { p = a.P1.inf }
+                yield { p = a.P2.inf }
+                restartStrip()
+        }
+
+
+
     let vertex (v : Vertex) =
         vertex {
-            let p = uniform.ViewProjTrafo * v.pos
+            let wp = v.pos
+            let p = uniform.ViewProjTrafo * wp
             let l = uniform.ViewProjTrafo * V4d(uniform.LightLocation, 1.0)
 
             return {
                 pos = p
                 inf = p - l
-                wp = v.pos
+                wp = wp
                 l = uniform.LightLocation
+                id = v.id
             }
         }
+
+
 
     let extrude (a : TriangleAdjacency<Vertex>) =
         triangle {
@@ -2415,49 +2565,41 @@ module VolumeShader =
             let w12 = a.N12.wp.XYZ
             let w20 = a.N20.wp.XYZ
 
-            let p0n = a.P0.pos
-            let p1n = a.P1.pos
-            let p2n = a.P2.pos
-                    
             let light = a.P0.l
 
             if isOutlineEdge light w0 w1 w2 w01 then
                 // Line01 is an outline
 
                 if ff then 
-                    yield { p = p0n }
-                    yield { p = p1n }
+                    yield { p = a.P0.wp }
+                    yield { p = a.P1.wp }
                     restartStrip()
                 else
-                    yield { p = p1n }
-                    yield { p = p0n }
+                    yield { p = a.P1.wp }
+                    yield { p = a.P0.wp }
                     restartStrip()
-
-
-
-                ()
 
             if isOutlineEdge light w1 w2 w0 w12 then
                 // Line12 is an outline
 
                 if ff then 
-                    yield { p = p1n }
-                    yield { p = p2n }
+                    yield { p = a.P1.wp }
+                    yield { p = a.P2.wp }
                     restartStrip()
                 else
-                    yield { p = p2n }
-                    yield { p = p1n }
+                    yield { p = a.P2.wp }
+                    yield { p = a.P1.wp }
                     restartStrip()
 
             if isOutlineEdge light w2 w0 w1 w20 then
                 // Line20 is an outline
                 if ff then 
-                    yield { p = p2n }
-                    yield { p = p0n }
+                    yield { p = a.P2.wp }
+                    yield { p = a.P0.wp }
                     restartStrip()
                 else
-                    yield { p = p0n }
-                    yield { p = p2n }
+                    yield { p = a.P0.wp }
+                    yield { p = a.P2.wp }
                     restartStrip()
 
         }
@@ -2545,6 +2687,30 @@ module VolumeShader =
 
 
 
+    type Fragment =
+        {
+            [<Color>] color : V4d 
+            [<Depth>] depth : float
+        }
+
+    let colorSampler =
+        sampler2d {
+            texture uniform?ColorTexture
+        }
+
+    let depthSampler =
+        sampler2d {
+            texture uniform?DepthTexture
+        }
+
+    let colorAndDepth (v : Effects.Vertex) =
+        fragment {
+            let pixel = V2i(v.tc * V2d colorSampler.Size)
+            return { 
+                color = colorSampler.Read(pixel, 0)
+                depth = depthSampler.Read(pixel, 0).X
+            }
+        }
 
 
 
@@ -2700,6 +2866,7 @@ let main args =
 
 
     let viewPos = cam.testView |> Mod.map CameraView.location 
+    let viewDir = cam.testView |> Mod.map CameraView.forward
     let outlineAndTriangles = Outline.createFB app.Runtime viewPos sg
 
 
@@ -2732,6 +2899,19 @@ let main args =
                     StencilOperationFunction.Keep
                 )
         )
+
+    let zeroStencil =
+        StencilMode(
+            IsEnabled = true,
+            Compare = StencilFunction(StencilCompareFunction.Equal, 0, 0xFFFFFFFFu),
+            Operation = 
+                StencilOperation(
+                    StencilOperationFunction.Keep, 
+                    StencilOperationFunction.Keep, 
+                    StencilOperationFunction.Keep
+                )
+        )
+
 
     let afterMain = RenderPass.after "bla" RenderPassOrder.Arbitrary RenderPass.main
     let final = RenderPass.after "blubber" RenderPassOrder.Arbitrary afterMain
@@ -2796,33 +2976,70 @@ let main args =
             |> Sg.vertexBuffer DefaultSemantic.Positions view
 
 
+    let shadowVolumeGeometry =
+        Sg.aset {
+
+            // render the front and back-cap
+            yield shadowGeometry |> Sg.effect [
+                VolumeShader.vertex |> toEffect
+                VolumeShader.frontAndBackCap |> toEffect
+                DefaultSurfaces.constantColor C4f.Black |> toEffect
+            ]
+
+            // render the side-faces of the volume
+            yield outlineGeometry |> Sg.effect [
+                VolumeShader.vertex |> toEffect
+                VolumeShader.sides |> toEffect
+                DefaultSurfaces.constantColor C4f.Black |> toEffect
+            ]
+
+        }
+
+
+    let mode = Mod.init FillMode.Fill
+
+    let (color, depth) =
+        sg  |> Sg.fillMode mode
+            |> Sg.andAlso floor
+            |> Sg.uniform "LightLocation" viewPos
+            |> Sg.uniform "ViewportSize" ctrl.Sizes
+            |> Sg.viewTrafo (view |> Mod.map CameraView.viewTrafo)
+            |> Sg.projTrafo (proj |> Mod.map Frustum.projTrafo)
+            |> Sg.compile app.Runtime ctrl.FramebufferSignature 
+            |> RenderTask.renderToColorAndDepth ctrl.Sizes
+
+    let sg =   
+        Sg.fullScreenQuad
+            |> Sg.uniform "ColorTexture" color
+            |> Sg.uniform "DepthTexture" depth
+            |> Sg.effect [
+                VolumeShader.colorAndDepth |> toEffect
+            ]
+
     let shadows =
         Sg.group' [ 
 
             let color = C4f(0.0,0.0,0.0,0.0)
 
-            yield
-                shadowGeometry
+            // render the shadow volume
+            yield 
+                shadowVolumeGeometry
+                    |> Sg.pass afterMain
                     |> Sg.stencilMode (Mod.constant writeStencil)
                     |> Sg.writeBuffers' (Set.ofList [ DefaultSemantic.Stencil ])
-                    |> Sg.pass afterMain
-                    |> Sg.effect [
-                        VolumeShader.vertex |> toEffect
-                        VolumeShader.extrude |> toEffect
-                        DefaultSurfaces.constantColor (C4f(1.0,0.0,0.0,0.0)) |> toEffect
-                    ]
-
-            yield
-                outlineGeometry
-                    |> Sg.writeBuffers' (Set.ofList [ DefaultSemantic.Colors ])
-                    |> Sg.pass afterFinal
-                    |> Sg.depthTest (Mod.constant DepthTestMode.None)
-                    |> Sg.uniform "LineWidth" (Mod.constant 5.0)
-                    |> Sg.effect [
-                        DefaultSurfaces.trafo |> toEffect
-                        DefaultSurfaces.thickLine |> toEffect
-                        DefaultSurfaces.constantColor C4f.Red |> toEffect
-                    ]
+//
+//            yield
+//                outlineGeometry
+//                    |> Sg.onOff debug
+//                    |> Sg.writeBuffers' (Set.ofList [ DefaultSemantic.Colors ])
+//                    |> Sg.pass afterFinal
+//                    |> Sg.depthTest (Mod.constant DepthTestMode.None)
+//                    |> Sg.uniform "LineWidth" (Mod.constant 5.0)
+//                    |> Sg.effect [
+//                        DefaultSurfaces.trafo |> toEffect
+//                        DefaultSurfaces.thickLine |> toEffect
+//                        DefaultSurfaces.constantColor C4f.Red |> toEffect
+//                    ]
 
             yield
                 Sg.fullScreenQuad
@@ -2837,16 +3054,34 @@ let main args =
 
         ]
 
-    let mode = Mod.init FillMode.Fill
 
     let sg =
-        sg  |> Sg.fillMode mode
-            |> Sg.andAlso floor
-            |> Sg.andAlso shadows
-            |> Sg.uniform "LightLocation" viewPos
+        Sg.aset {
+            yield sg
+
+            yield shadows
+
+//            let blend = BlendMode.Blend
+//            yield
+//                outlineGeometry
+//                    |> Sg.pass afterFinal
+//                    |> Sg.blendMode (Mod.constant blend)
+//                    |> Sg.cullMode (Mod.constant CullMode.Clockwise)
+//                    |> Sg.stencilMode (Mod.constant zeroStencil)
+//                    |> Sg.effect [
+//                        VolumeShader.wedge |> toEffect
+//                        DefaultSurfaces.constantColor (C4f(1.0, 0.0, 0.0, 0.1)) |> toEffect
+//                    ]
+        }
+
+    let sg =
+        sg  |> Sg.uniform "LightLocation" viewPos
+            |> Sg.uniform "LightDirection" viewDir
+            |> Sg.uniform "LightRadius" (Mod.constant 1.0)
             |> Sg.uniform "ViewportSize" ctrl.Sizes
             |> Sg.viewTrafo (view |> Mod.map CameraView.viewTrafo)
             |> Sg.projTrafo (proj |> Mod.map Frustum.projTrafo)
+
 
     ctrl.Keyboard.KeyDown(Keys.X).Values.Add (fun () ->
         transact (fun () ->
