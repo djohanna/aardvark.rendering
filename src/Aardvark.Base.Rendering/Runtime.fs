@@ -90,7 +90,7 @@ and ITransformFeedbackRenderTask =
     abstract member Surface : IBackendSurface
     abstract member WantedSemantics : list<Symbol>
     abstract member Mode : IndexedGeometryMode
-    abstract member Run : IAdaptiveObject * IBackendBuffer * int64 * int64 -> FrameStatistics
+    abstract member Run : IAdaptiveObject * Map<Symbol, IBackendBuffer * int64 * int64> -> FrameStatistics
 
 and [<AllowNullLiteral>] IFramebufferSignature =
     abstract member Runtime : IRuntime
@@ -173,6 +173,10 @@ type RenderTaskRunExtensions() =
     [<Extension>]
     static member Run(t : IRenderTask, fbo : OutputDescription) =
         t.Run(null, fbo)
+
+    [<Extension>]
+    static member Run(t : ITransformFeedbackRenderTask, buffers : Map<Symbol, IBackendBuffer * int64 * int64>) =
+        t.Run(null, buffers)
 
 type ShaderStage =
     | Vertex = 1

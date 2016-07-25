@@ -2964,7 +2964,8 @@ let main args =
     let outlineGeometry =
         let lines =
             Mod.custom (fun self ->
-                let stats = buildOutline.Run(self, outlineBuffer, 0L, int64 outlineBuffer.SizeInBytes)
+                let map = Map.ofList [ DefaultSemantic.Positions, (outlineBuffer :> IBackendBuffer, 0L, int64 outlineBuffer.SizeInBytes) ]
+                let stats = buildOutline.Run(self, map)
                 outlineBuffer, int stats.PrimitiveCount
             )
 
@@ -3061,17 +3062,17 @@ let main args =
 
             yield shadows
 
-//            let blend = BlendMode.Blend
-//            yield
-//                outlineGeometry
-//                    |> Sg.pass afterFinal
-//                    |> Sg.blendMode (Mod.constant blend)
-//                    |> Sg.cullMode (Mod.constant CullMode.Clockwise)
-//                    |> Sg.stencilMode (Mod.constant zeroStencil)
-//                    |> Sg.effect [
-//                        VolumeShader.wedge |> toEffect
-//                        DefaultSurfaces.constantColor (C4f(1.0, 0.0, 0.0, 0.1)) |> toEffect
-//                    ]
+            let blend = BlendMode.Blend
+            yield
+                outlineGeometry
+                    |> Sg.pass afterFinal
+                    |> Sg.blendMode (Mod.constant blend)
+                    |> Sg.cullMode (Mod.constant CullMode.Clockwise)
+                    |> Sg.stencilMode (Mod.constant zeroStencil)
+                    |> Sg.effect [
+                        VolumeShader.wedge |> toEffect
+                        DefaultSurfaces.constantColor (C4f(1.0, 0.0, 0.0, 0.1)) |> toEffect
+                    ]
         }
 
     let sg =

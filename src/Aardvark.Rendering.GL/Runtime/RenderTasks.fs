@@ -1094,7 +1094,7 @@ module RenderTasks =
 
         let primitivesWritten = OpenGlQuery(QueryTarget.TransformFeedbackPrimitivesWritten)
 
-        member x.Run (caller : IAdaptiveObject, buffer : Aardvark.Rendering.GL.Buffer, offset : int64, size : int64) =
+        member x.Run (caller : IAdaptiveObject, buffers : Map<Symbol, Aardvark.Rendering.GL.Buffer * int64 * int64>) =
             x.EvaluateAlways caller (fun () ->
                 x.OutOfDate <- true
 
@@ -1119,8 +1119,16 @@ module RenderTasks =
                         GL.UseProgram(program.Handle)
                         GL.Check "could not use program"
            
-                        // bind the feedback buffer
-                        GL.BindBufferRange(BufferRangeTarget.TransformFeedbackBuffer, 0, buffer.Handle, nativeint offset, nativeint size)
+                        // bind the feedback buffers
+                        let mutable index = 0
+                        for sem in wantedSemantics do
+                            match Map.tryFind sem buffers with
+                                | Some(buffer, offset, size) ->
+                                    GL.BindBufferRange(BufferRangeTarget.TransformFeedbackBuffer, index, buffer.Handle, nativeint offset, nativeint size)
+                                | None ->
+                                    GL.BindBufferBase(BufferRangeTarget.TransformFeedbackBuffer, index, 0)
+                            index <- index + 1
+
                         GL.Check "could not bind buffer"
 
                         // start the feedback process
@@ -1134,8 +1142,9 @@ module RenderTasks =
                         GL.EndTransformFeedback(); GL.Check "could stop TransformFeedback"
                         primitivesWritten.Stop()
 
-                        // unbind the feedback buffer
-                        GL.BindBufferBase(BufferRangeTarget.TransformFeedbackBuffer, 0, 0)
+                        // unbind the feedback buffers
+                        for i in 0..index-1 do
+                            GL.BindBufferBase(BufferRangeTarget.TransformFeedbackBuffer, i, 0)
                         GL.Check "could not unbind buffer"
 
 
@@ -1174,6 +1183,6 @@ module RenderTasks =
 
         interface ITransformFeedbackRenderTask with
             member x.Surface = program :> IBackendSurface
-            member x.Run(caller, buffer, offset, size) = x.Run(caller, unbox buffer, offset, size)
+            member x.Run(caller, buffers) = x.Run(caller, buffers |> Map.map (fun _ (b,o,s) -> unbox b, o, s))
             member x.Mode = mode
             member x.WantedSemantics = wantedSemantics
