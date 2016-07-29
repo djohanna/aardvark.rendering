@@ -79,9 +79,12 @@ and IRenderTask =
     inherit IDisposable
     inherit IAdaptiveObject
     abstract member FramebufferSignature : IFramebufferSignature
-    abstract member Runtime : Option<IRuntime>
-    abstract member Run : IAdaptiveObject * OutputDescription -> RenderingResult
-    abstract member FrameId : uint64
+
+    abstract member Runtime  : Option<IRuntime>
+    abstract member FrameId   : uint64
+
+    abstract member Run      : IAdaptiveObject * OutputDescription -> RenderingResult
+    abstract member Prepare  : IAdaptiveObject -> FrameStatistics
 
 and [<AllowNullLiteral>] IFramebufferSignature =
     abstract member Runtime : IRuntime

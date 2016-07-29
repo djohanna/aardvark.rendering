@@ -86,6 +86,7 @@ type AbstractRenderTask(runtime : IRuntime, context : Context, renderPass : Rend
         member x.Runtime = Some runtime
         member x.FramebufferSignature = renderPass :> IFramebufferSignature
         member x.Run(caller, outputs) = x.Run(caller, outputs)
+        member x.Prepare(caller) = FrameStatistics.Zero
         member x.FrameId = frameId
 
 [<AbstractClass>]

@@ -145,7 +145,8 @@ module RenderTasks =
             GL.Check "could not set viewport"
 
 
-        abstract member Perform : Framebuffer -> FrameStatistics
+        abstract member Perform : Framebuffer     -> FrameStatistics
+        abstract member Prepare : unit -> FrameStatistics
         abstract member Release : unit -> unit
 
         member x.Dispose() =
@@ -204,11 +205,21 @@ module RenderTasks =
                 innerStats + !scope.stats
             )
 
+        member x.Prepare(caller : IAdaptiveObject) =
+            x.EvaluateAlways caller (fun () -> 
+                use token = ctx.ResourceLock
+                // fixup those context dependencies upfron
+                if currentContext.UnsafeCache <> ctx.CurrentContextHandle.Value then
+                    transact (fun () -> Mod.change currentContext ctx.CurrentContextHandle.Value)
+                x.Prepare ()
+            )
+
         interface IDisposable with
             member x.Dispose() = x.Dispose()
 
         interface IRenderTask with
-            member x.Run(a : IAdaptiveObject, b : OutputDescription) = RenderingResult(b.framebuffer, x.Run(a,b))
+            member x.Run(caller : IAdaptiveObject, b : OutputDescription) = RenderingResult(b.framebuffer, x.Run(caller,b))
+            member x.Prepare(caller) = x.Prepare(caller)
             member x.FrameId = frameId
             member x.FramebufferSignature = fboSignature
             member x.Runtime = Some ctx.Runtime
@@ -242,6 +253,7 @@ module RenderTasks =
         member x.Parent = parent
 
         abstract member Perform : unit -> FrameStatistics
+        abstract member Prepare : unit -> FrameStatistics
         abstract member Dispose : unit -> unit
         abstract member Add : PreparedMultiRenderObject -> unit
         abstract member Remove : PreparedMultiRenderObject -> unit
@@ -409,8 +421,7 @@ module RenderTasks =
                 currentConfig <- config
 
         override x.Perform() =
-            let config = parent.Config.GetValue parent
-            reinit x config
+            reinit x (Mod.force parent.Config)
 
             let updateStats = 
                 x.ProgramUpdate (fun () -> program.Update parent)
@@ -420,6 +431,11 @@ module RenderTasks =
 
             stats
                
+        override x.Prepare () =
+            reinit x (Mod.force parent.Config)
+            let s = x.ProgramUpdate (fun () -> program.Update parent)
+            FrameStatistics.Zero
+        
 
         override x.Dispose() =
             if hasProgram then
@@ -736,6 +752,11 @@ module RenderTasks =
 
             stats
 
+        override x.Prepare() =
+            let cfg = parent.Config.GetValue parent
+            reinit x cfg
+            let stats = x.ProgramUpdate ( fun () -> program.Update parent )
+            FrameStatistics.Zero
 
 
         override x.Dispose() =
@@ -925,16 +946,11 @@ module RenderTasks =
                     subtasks <- Map.add pass task subtasks
                     task
 
-
-
-        override x.Perform(fbo : Framebuffer) =
-            let mutable stats = FrameStatistics.Zero
+        member x.UpdateSelf stats =
             let deltas = preparedObjectReader.GetDelta x
 
-            x.ResourceManager.DrawBufferManager.Write(fbo)
-
             resourceUpdateWatch.Restart()
-            stats <- stats + resources.Update(x)
+            let stats = stats + resources.Update(x)
             resourceUpdateWatch.Stop()
 
             match deltas with
@@ -950,6 +966,13 @@ module RenderTasks =
                         let task = getSubTask v.RenderPass
                         task.Remove v
 
+            stats
+
+        override x.Perform(fbo : Framebuffer) =
+
+            x.ResourceManager.DrawBufferManager.Write(fbo)
+
+            let stats = x.UpdateSelf FrameStatistics.Zero
 
             let mutable current = 0
             let mutable query =  0 //GL.GenQuery()
@@ -977,6 +1000,12 @@ module RenderTasks =
                 ResourceUpdateTime = resourceUpdateWatch.ElapsedGPU
                 PrimitiveCount = float primitives
             }
+
+        override x.Prepare() = 
+            let mutable stats = x.UpdateSelf FrameStatistics.Zero
+            for (_,t) in Map.toSeq subtasks do 
+                stats <- stats + t.Prepare()
+            stats
 
 
         override x.Release() =
@@ -1078,6 +1107,7 @@ module RenderTasks =
             member x.Runtime = runtime |> Some
             member x.Run(caller, fbo) =
                 x.Run(caller, fbo)
+            member x.Prepare caller = FrameStatistics.Zero
 
             member x.Dispose() =
                 x.Dispose()

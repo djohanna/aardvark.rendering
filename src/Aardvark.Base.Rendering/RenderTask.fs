@@ -508,6 +508,7 @@ type AbstractRenderTask() =
     abstract member Runtime : Option<IRuntime>
     abstract member Perform : OutputDescription -> FrameStatistics
     abstract member Dispose : unit -> unit
+    abstract member Prepare : IAdaptiveObject -> FrameStatistics
 
     member x.FrameId = frameId
     member x.Run(caller : IAdaptiveObject, out : OutputDescription) =
@@ -525,6 +526,7 @@ type AbstractRenderTask() =
         member x.Runtime = x.Runtime
         member x.FrameId = frameId
         member x.Run(caller, out) = RenderingResult(out.framebuffer, FrameStatistics.Zero)
+        member x.Prepare(caller) = x.Prepare(caller)
 
 
 
@@ -541,6 +543,7 @@ module RenderTask =
         interface IRenderTask with
             member x.FramebufferSignature = null
             member x.Dispose() = ()
+            member x.Prepare caller = FrameStatistics.Zero
             member x.Run(caller, fbo) = RenderingResult(fbo.framebuffer, FrameStatistics.Zero)
             member x.Runtime = None
             member x.FrameId = 0UL
@@ -580,6 +583,11 @@ module RenderTask =
 
                     RenderingResult(fbo.framebuffer, stats) |> f
                 )
+            member x.Prepare(caller) =
+                let mutable stats = FrameStatistics.Zero
+                for t in tasks do 
+                    stats <- t.Prepare caller
+                stats
 
             member x.Dispose() =
                 for t in tasks do t.RemoveOutput this
@@ -619,6 +627,8 @@ module RenderTask =
                     frameId <- ni.FrameId
                     ni.Run(x, fbo)
                 )
+
+            member x.Prepare(caller) = FrameStatistics.Zero // TODO: (think) do more here?
 
             member x.Dispose() =
                 input.RemoveOutput x
@@ -700,6 +710,8 @@ module RenderTask =
                     RenderingResult(fbo.framebuffer, stats)
                 )
 
+            member x.Prepare _ = FrameStatistics.Zero
+
             member x.Dispose() =
                 reader.RemoveOutput this
                 reader.Dispose()
@@ -723,6 +735,8 @@ module RenderTask =
                 x.EvaluateAlways caller (fun () ->
                     f.Evaluate (x,(x :> IRenderTask,fbo))
                 )
+
+            member x.Prepare _ = FrameStatistics.Zero
 
             member x.Dispose() =
                 f.RemoveOutput this
@@ -750,6 +764,7 @@ module RenderTask =
 
         interface IRenderTask with
             member x.Run(caller, fbo) = inner.Run(caller, fbo)
+            member x.Prepare caller = inner.Prepare x
             member x.FrameId = inner.FrameId
             member x.FramebufferSignature = inner.FramebufferSignature
             member x.Runtime = inner.Runtime
@@ -778,6 +793,7 @@ module RenderTask =
 
                     res
                 )
+            member x.Prepare caller = inner.Prepare caller
 
             member x.Dispose() = 
                 inner.RemoveOutput x

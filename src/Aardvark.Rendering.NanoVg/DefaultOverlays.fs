@@ -365,6 +365,7 @@ module DefaultOverlays =
                         notRendering.Start()
                     res
                 )
+            member x.Prepare caller = inner.Prepare caller
 
             member x.FrameId = frameId
 

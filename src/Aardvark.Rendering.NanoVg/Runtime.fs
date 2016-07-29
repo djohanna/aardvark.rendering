@@ -447,6 +447,7 @@ type RenderTask(runtime : Runtime, ctx : Context.NanoVgContext, l : alist<NvgRen
         member x.Run(caller, fbo) = 
             x.Run(caller, fbo)
             RenderingResult(fbo.framebuffer, FrameStatistics.Zero)
+        member x.Prepare caller = FrameStatistics.Zero
 
         member x.Dispose() =
             x.Dispose()

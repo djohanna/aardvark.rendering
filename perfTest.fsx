@@ -98,7 +98,7 @@ let show (dataFile : string) =
 
 
 let testStartupPerformance () =
-    let outFile = "startupResults.csv"
+    let outFile = "startupResults2.csv"
     if File.Exists outFile |> not then
         File.AppendAllLines(outFile, [| "config; objects; time; "|])
     for n in [ 1000; 5000; 10000; 15000; 20000; 30000; 50000] do
