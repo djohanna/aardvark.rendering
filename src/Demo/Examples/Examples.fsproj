@@ -73,6 +73,7 @@
     <Compile Include="LoD.fs" />
     <Compile Include="Tic-Tac-Toe.fs" />
     <Compile Include="Polygons.fs" />
+    <Compile Include="FRPAgain.fs" />
     <Compile Include="AssimpInterop.fs" />
     <Compile Include="HelloWorld.fs" />
     <Compile Include="Maya.fs" />
