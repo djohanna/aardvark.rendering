@@ -65,6 +65,7 @@ type IRuntime =
     abstract member DeleteRenderbuffer : IRenderbuffer -> unit
     abstract member DeleteFramebuffer : IFramebuffer -> unit
 
+    //abstract member Prepare : fboSignature : IFramebufferSignature * aset<IRenderObject> -> IPreparedRenderObjectSet
     abstract member CompileClear : fboSignature : IFramebufferSignature * clearColors : IMod<Map<Symbol, C4f>> * clearDepth : IMod<Option<double>> -> IRenderTask
     abstract member CompileRender : fboSignature : IFramebufferSignature * BackendConfiguration * aset<IRenderObject> -> IRenderTask
     
@@ -74,6 +75,12 @@ type IRuntime =
     abstract member Download : texture : IBackendTexture * level : int * slice : int * target : PixImage -> unit
     abstract member DownloadStencil : texture : IBackendTexture * level : int * slice : int * target : Matrix<int> -> unit
     abstract member DownloadDepth : texture : IBackendTexture * level : int * slice : int * target : Matrix<float32> -> unit
+
+//and IPreparedRenderObjectSet =
+//    inherit IDisposable
+//    inherit aset<IPreparedRenderObject>
+//    abstract member FramebufferSignature : IFramebufferSignature
+//    abstract member Runtime : IRuntime
 
 and IRenderTask =
     inherit IDisposable

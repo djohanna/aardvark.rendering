@@ -28,6 +28,27 @@ type IUniformProvider =
     inherit IDisposable
     abstract member TryGetUniform : scope : Ag.Scope * name : Symbol -> Option<IMod>
 
+type SimpleUniformProvider(values : Map<Symbol, IMod>) =
+    interface IUniformProvider with
+        member x.TryGetUniform (scope,name) = Map.tryFind name values
+        member x.Dispose() = ()
+
+    new (l : list<Symbol * IMod>) = new SimpleUniformProvider(Map.ofList l)
+
+type SequentialUniformProvider(inner : list<IUniformProvider>) =
+    let rec find (l : list<IUniformProvider>) (scope) (name) =
+        match l with
+            | [] -> None
+            | h :: l ->
+                match h.TryGetUniform(scope, name) with
+                    | Some r -> Some r
+                    | None -> find l scope name
+
+    interface IUniformProvider with
+        member x.TryGetUniform (scope,name) = find inner scope name
+        member x.Dispose() = ()
+
+
 
 module private RenderObjectIds =
     open System.Threading

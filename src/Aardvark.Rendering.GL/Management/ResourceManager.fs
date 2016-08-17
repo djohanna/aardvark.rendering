@@ -227,7 +227,7 @@ type UniformBufferManager(ctx : Context, renderTaskInfo : Option<RenderTaskLock>
     let viewCache = ResourceCache<UniformBufferView>(None, renderTaskInfo)
     let rw = new ReaderWriterLockSlim()
 
-    member x.CreateUniformBuffer(scope : Ag.Scope, u : IUniformProvider, additional : SymbolDict<obj>) : IResource<UniformBufferView> =
+    member x.CreateUniformBuffer(scope : Ag.Scope, u : IUniformProvider, fallback : Symbol -> Option<IMod>) : IResource<UniformBufferView> =
         let values =
             fields 
             |> List.map (fun f ->
@@ -235,9 +235,9 @@ type UniformBufferManager(ctx : Context, renderTaskInfo : Option<RenderTaskLock>
                 match u.TryGetUniform(scope, sem) with
                     | Some v -> sem, v
                     | None -> 
-                        match additional.TryGetValue sem with
-                            | (true, (:? IMod as m)) -> sem, m
-                            | _ -> failwithf "[GL] could not get uniform: %A" f
+                        match fallback sem with
+                            | Some v -> sem, v
+                            | None -> failwithf "[GL] could not get uniform: %A" f
             )
 
         let key = values |> List.map (fun (_,v) -> v :> obj)
@@ -554,7 +554,7 @@ type ResourceManager private (parent : Option<ResourceManager>, ctx : Context, r
             | None ->
                 failwithf "[GL] could not get uniform: %A" uniform
      
-    member x.CreateUniformBuffer(scope : Ag.Scope, layout : UniformBlock, program : Program, u : IUniformProvider) =
+    member x.CreateUniformBuffer(scope : Ag.Scope, layout : UniformBlock, program : Program, u : IUniformProvider, fallback : Symbol -> Option<IMod>) =
         let manager = 
             uniformBufferManagers.GetOrAdd(
                 (layout.size, layout.fields), 
@@ -563,5 +563,9 @@ type ResourceManager private (parent : Option<ResourceManager>, ctx : Context, r
                     new UniformBufferManager(ctx, Option.map snd renderTaskInfo, s, uniformFields)
             )
 
-        manager.CreateUniformBuffer(scope, u, program.UniformGetters)
+        let uniforms = 
+            let programUniforms = program.UniformGetters |> SymDict.toList |> List.choose (fun (k,v) -> match v with | :? IMod as m -> Some (k,m) | _ -> None) |> Map.ofList
+            new SequentialUniformProvider([ u; new SimpleUniformProvider(programUniforms) :> IUniformProvider])
+
+        manager.CreateUniformBuffer(scope, uniforms, fallback)
       

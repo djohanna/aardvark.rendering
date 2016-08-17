@@ -295,7 +295,7 @@ type ResourceManagerExtensions private() =
   
 
     [<Extension>]
-    static member Prepare (x : ResourceManager, fboSignature : IFramebufferSignature, rj : RenderObject) : PreparedRenderObject =
+    static member Prepare (x : ResourceManager, fboSignature : IFramebufferSignature, rj : RenderObject, uniformFallback : Symbol -> Option<IMod>) : PreparedRenderObject =
         // use a context token to avoid making context current/uncurrent repeatedly
         use token = x.Context.ResourceLock
 
@@ -312,7 +312,7 @@ type ResourceManagerExtensions private() =
         let uniformBuffers =
             prog.UniformBlocks 
                 |> List.map (fun block ->
-                    block.index, x.CreateUniformBuffer(rj.AttributeScope, block, prog, rj.Uniforms)
+                    block.index, x.CreateUniformBuffer(rj.AttributeScope, block, prog, rj.Uniforms, uniformFallback)
                    )
                 |> Map.ofList
 

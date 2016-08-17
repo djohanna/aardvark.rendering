@@ -189,16 +189,77 @@ module TrafoSemantics =
         member x.ModelViewProjTrafoInv(s : obj) =
             s.ModelViewProjTrafo |> inverse
 
+
+module Uniforms = 
+    open System.Runtime.CompilerServices
+    open TrafoSemantics
+    
+    type UniformExtensionAttribute() = inherit System.Attribute()
+
+    type UniformState = { provider : IUniformProvider; scope : Ag.Scope }
+    type Uniform<'a> =
+        abstract member Run : byref<UniformState> -> Option<'a>
+
+
+    module Uniform = 
+        let get<'a> (name : string) =
+            { new Uniform<IMod<'a>> with
+                member x.Run(s) =
+                    match s.provider.TryGetUniform(s.scope, Symbol.Create name) with
+                        | Some(:? IMod<'a> as m) -> Some m
+                        | _ -> None
+            }
+
+    type UniformBuilder() =
+        member x.Bind(m : Uniform<'a>, f : 'a -> Uniform<'b>) =
+            { new Uniform<'b> with
+                member x.Run(state) =
+                    let a = m.Run(&state)
+                    match a with
+                        | Some a -> (f a).Run(&state)
+                        | None -> None
+            }
+
+        member x.Return(v) =
+            { new Uniform<'a> with
+                member x.Run(_) = Some v
+            }
+
+    let uniform = UniformBuilder()      
+
+    [<UniformExtension>]
+    module TrafoRules = 
+
+        let ViewProjTrafo =
+            uniform {
+                let! view = Uniform.get<Trafo3d> "ViewTrafo"
+                let! proj = Uniform.get<Trafo3d> "ProjTrafo"
+                return view <*> proj
+            }
+
+        let ModelViewTrafo =
+            uniform {
+                let! model = Uniform.get<Trafo3d> "ModelTrafo"
+                let! view = Uniform.get<Trafo3d> "ViewTrafo"
+                return model <*> view
+            }
+
+        let ModelViewProjTrafo =
+            uniform {
+                let! model = Uniform.get<Trafo3d> "ModelTrafo"
+                let! viewProj = ViewProjTrafo
+                return model <*> viewProj
+            }
+
 module UniformRules =
     open Microsoft.FSharp.Quotations
     open TrafoSemantics
-    let private uniform<'a> (name : string) : Expr<IMod<'a>> =
-        Expr.Var(Var(name, typeof<IMod<'a>>)) |> Expr.Cast
 
-    let ModelTrafo = uniform<Trafo3d> "ModelTrafo"
-    let ViewTrafo = uniform<Trafo3d> "ViewTrafo"
-    let ProjTrafo = uniform<Trafo3d> "ProjTrafo"
+    type UniformAttribute(name : string) = 
+        inherit System.Attribute()
+        member x.Name = name
 
-    let ViewProjTrafo = <@ %ViewTrafo <*> %ProjTrafo @>
-    let ModelViewTrafo = <@ %ModelTrafo <*> %ViewTrafo @>
+    let ViewProjTrafo ([<Uniform("ViewTrafo")>] view : IMod<Trafo3d>) (proj : IMod<Trafo3d>) =
+        view <*> proj
+
 

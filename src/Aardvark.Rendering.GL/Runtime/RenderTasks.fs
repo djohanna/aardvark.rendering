@@ -16,16 +16,245 @@ open Aardvark.Rendering.GL.Compiler
 open System.Runtime.CompilerServices
 open Microsoft.FSharp.NativeInterop
 
+
+type RenderObjectStats() =
+    inherit DirtyTrackingAdaptiveObject<IMod<DrawCallStats>>()
+
+    let oldValues = Dict<IMod<DrawCallStats>, DrawCallStats>()
+    let mutable drawCalls = 0
+    let mutable effectiveCalls = 0
+    let mutable resourceCount = 0
+
+    let mutable added = 0
+    let mutable removed = 0
+
+    let add (stats : DrawCallStats) =
+        match stats with
+            | NoDraw -> ()
+            | DirectDraw(c, i) ->
+                // TODO: assuming that DrawIndirects have only 1 instance
+                Interlocked.Add(&drawCalls, c) |> ignore
+                Interlocked.Add(&effectiveCalls, i) |> ignore
+            | IndirectDraw c ->
+                Interlocked.Add(&drawCalls, 1) |> ignore
+                Interlocked.Add(&effectiveCalls, c) |> ignore
+                    
+    let remove (stats : DrawCallStats) =
+        match stats with
+            | NoDraw -> ()
+            | DirectDraw(c, i) ->
+                // TODO: assuming that DrawIndirects have only 1 instance
+                Interlocked.Add(&drawCalls, -c) |> ignore
+                Interlocked.Add(&effectiveCalls, -i) |> ignore
+            | IndirectDraw c ->
+                Interlocked.Add(&drawCalls, -1) |> ignore
+                Interlocked.Add(&effectiveCalls, -c) |> ignore
+
+    member x.Add(o : PreparedRenderObject) =
+        added <- added + 1
+        resourceCount <- resourceCount + o.ResourceCount
+        let value = o.DrawCallStats.GetValue x
+        oldValues.[o.DrawCallStats] <- value
+        add value
+
+    member x.Remove(o : PreparedRenderObject) =
+        removed <- removed + 1
+        resourceCount <- resourceCount - o.ResourceCount
+        match oldValues.TryRemove o.DrawCallStats with
+            | (true, old) -> 
+                lock o.DrawCallStats (fun () -> o.DrawCallStats.Outputs.Remove x |> ignore)
+                remove old
+            | _ -> ()
+
+    member x.GetValue(caller : IAdaptiveObject) =
+        x.EvaluateAlways' caller (fun dirty ->
+            if x.OutOfDate then
+                for d in dirty do
+                    let value = d.GetValue x
+                    match oldValues.TryGetValue d with
+                        | (true, old) -> 
+                            remove old
+                            add value
+                        | _ ->
+                            () // removed
+
+                    oldValues.[d] <- value
+                                
+            let add = Interlocked.Exchange(&added, 0) 
+            let rem = Interlocked.Exchange(&removed, 0)
+            { FrameStatistics.Zero with 
+                DrawCallCount = float drawCalls
+                EffectiveDrawCallCount = float effectiveCalls 
+                VirtualResourceCount = float resourceCount
+                AddedRenderObjects = float add
+                RemovedRenderObjects = float rem
+            }
+        )
+
+    interface IMod with
+        member x.IsConstant = false
+        member x.GetValue caller = x.GetValue caller :> obj
+
+    interface IMod<FrameStatistics> with
+        member x.GetValue caller = x.GetValue caller
+
+
+type IModRef =
+    inherit IMod
+    abstract member Value : obj with get, set
+
+type UniformMod<'a>(value : 'a) =
+    inherit Mod.AbstractMod<'a>()
+
+    let mutable cache = value
+
+    override x.Compute() = 
+        cache
+
+    interface IModRef with
+        member x.Value
+            with get() = cache :> obj
+            and set v = 
+                cache <- unbox v
+                x.MarkOutdated()
+
+
+type RenderObjectSet(man : ResourceManager, fboSignature : IFramebufferSignature, shareTextures : bool, shareBuffers : bool, splices : Symbol -> Option<obj>, objects : aset<IRenderObject>) =
+    let ctx = man.Context
+
+    let lock = RenderTaskLock()
+    let manager = new ResourceManager(man.Context, Some(fboSignature, lock), shareTextures, shareBuffers)
+
+    let resources = new Aardvark.Base.Rendering.ResourceInputSet()
+    let callStats = RenderObjectStats()
+
+    let add (ro : PreparedRenderObject) = 
+        let all = ro.Resources |> Seq.toList
+        for r in all do resources.Add r
+
+        callStats.Add ro
+
+        let old = ro.Activation
+        ro.Activation <- 
+            { new IDisposable with
+                member x.Dispose() =
+                    old.Dispose()
+                    for r in all do resources.Remove r
+                    callStats.Remove ro
+            }
+        ro
+
+    let holes = SymbolDict()
+
+    
+    let createMod (value : obj) =
+        let t = value.GetType()
+        let tmod = typedefof<UniformMod<_>>.MakeGenericType [|t|]
+        let ctor = tmod.GetConstructor [| t |]
+        ctor.Invoke([|value|]) |> unbox<IModRef>
+
+
+    let uniformFallback (sem : Symbol) =
+        match holes.TryGetValue sem with
+            | (true, v) -> Some (v :> IMod)
+            | _ -> 
+                match splices sem with
+                    | Some v ->
+                        let res = createMod v
+                        holes.[sem] <- res
+                        Some (res :> IMod)
+                    | _ ->
+                        None
+
+    let rec prepareRenderObject (ro : IRenderObject) =
+        match ro with
+            | :? RenderObject as r ->
+                new PreparedMultiRenderObject([manager.Prepare(fboSignature, r, uniformFallback) |> add])
+
+            | :? PreparedRenderObject as prep ->
+                new PreparedMultiRenderObject([prep |> PreparedRenderObject.clone |> add])
+
+            | :? MultiRenderObject as seq ->
+                let all = seq.Children |> List.collect(fun o -> (prepareRenderObject o).Children)
+                new PreparedMultiRenderObject(all)
+
+            | :? PreparedMultiRenderObject as seq ->
+                new PreparedMultiRenderObject (seq.Children |> List.map (PreparedRenderObject.clone >> add))
+
+            | _ ->
+                failwithf "[RenderTask] unsupported IRenderObject: %A" ro
+    
+    let preparedObjects = objects |> ASet.mapUse (fun r -> prepareRenderObject r :> IPreparedRenderObject)
+    let realReader = preparedObjects.GetReader()
+    let preparedObjectReader = 
+        {
+            new ASetReaders.AbstractReader<IPreparedRenderObject>() with
+                member x.ComputeDelta() =
+                    let delta = realReader.GetDelta(x)
+                    resources.Update(x) |> ignore
+                    delta
+
+                member x.Release() =
+                    ()
+        }
+
+    let reader = ASetReaders.ReferenceCountedReader(fun () -> preparedObjectReader :> IReader<_>)
+
+    member x.Splice(values : Map<Symbol, obj>) =
+        transact (fun () ->
+            for (k,m) in SymDict.toSeq holes do
+                match Map.tryFind k values with
+                    | Some v -> m.Value <- v
+                    | _ -> ()
+        )
+
+    member x.Manager = manager
+
+    member x.GetReader() =
+        new ASetReaders.CopyReader<_>(reader) :> IReader<_>
+    
+    member x.Dispose() =
+        realReader.Dispose()
+        resources.Dispose()
+
+    interface IDisposable with
+        member x.Dispose() = x.Dispose()
+
+    interface aset<IPreparedRenderObject> with
+        member x.GetReader() = x.GetReader()
+        member x.IsConstant = false
+        member x.Copy = x :> aset<_>
+        member x.ReaderCount = reader.ReferenceCount
+
+
+
+
+
 module RenderTasks =
     open System.Collections.Generic
 
+    let bla (set : RenderObjectSet) (task : IRenderTask) =
+        Mod.custom (fun self ->
+            lock set (fun () ->
+                let left = Map.empty
+                let right = Map.empty
+
+                set.Splice left
+                task.Run(null, Unchecked.defaultof<_>) |> ignore
+
+                set.Splice right
+                task.Run(null, Unchecked.defaultof<_>) |> ignore
+
+                task.Outputs.Add self |> ignore
+
+            )
+        )
+
 
     [<AbstractClass>]
-    type AbstractOpenGlRenderTask(manager : ResourceManager, fboSignature : IFramebufferSignature, config : IMod<BackendConfiguration>, shareTextures : bool, shareBuffers : bool) =
+    type AbstractOpenGlRenderTask(manager : ResourceManager, fboSignature : IFramebufferSignature, config : IMod<BackendConfiguration>) =
         inherit AbstractRenderTask()
         let ctx = manager.Context
-        let renderTaskLock = RenderTaskLock()
-        let manager = ResourceManager(manager.Context, Some (fboSignature, renderTaskLock), shareTextures, shareBuffers)
         let allBuffers = manager.DrawBufferManager.CreateConfig(fboSignature.ColorAttachments |> Map.toSeq |> Seq.map (snd >> fst) |> Set.ofSeq)
         let structureChanged = Mod.custom ignore
 
@@ -148,7 +377,6 @@ module RenderTasks =
         member x.Config = config
         member x.Context = ctx
         member x.Scope = scope
-        member x.RenderTaskLock = renderTaskLock
         member x.ResourceManager = manager
 
         override x.Dispose() =
@@ -178,12 +406,10 @@ module RenderTasks =
             let fboState = x.pushFbo desc
 
             let innerStats = 
-                renderTaskLock.Run (fun () -> 
-                    beforeRender.OnNext()
-                    let r = x.Perform fbo
-                    afterRender.OnNext()
-                    r
-                )
+                beforeRender.OnNext()
+                let r = x.Perform fbo
+                afterRender.OnNext()
+                r
 
             x.popFbo (desc, fboState)
             x.popDebugOutput debugState
@@ -764,138 +990,18 @@ module RenderTasks =
                 structuralChange.MarkOutdated()
                 objects.Remove o |> ignore
             )
-                
+    
+    type RenderTask(fboSignature : IFramebufferSignature, config : IMod<BackendConfiguration>, prepared : RenderObjectSet) as this =
+        inherit AbstractOpenGlRenderTask(prepared.Manager, fboSignature, config)
 
-    type RenderObjectStats() =
-        inherit DirtyTrackingAdaptiveObject<IMod<DrawCallStats>>()
+        let preparedReader = prepared.GetReader()
 
-        let oldValues = Dict<IMod<DrawCallStats>, DrawCallStats>()
-        let mutable drawCalls = 0
-        let mutable effectiveCalls = 0
-        let mutable resourceCount = 0
-
-        let mutable added = 0
-        let mutable removed = 0
-
-        let add (stats : DrawCallStats) =
-            match stats with
-                | NoDraw -> ()
-                | DirectDraw(c, i) ->
-                    // TODO: assuming that DrawIndirects have only 1 instance
-                    Interlocked.Add(&drawCalls, c) |> ignore
-                    Interlocked.Add(&effectiveCalls, i) |> ignore
-                | IndirectDraw c ->
-                    Interlocked.Add(&drawCalls, 1) |> ignore
-                    Interlocked.Add(&effectiveCalls, c) |> ignore
-                    
-        let remove (stats : DrawCallStats) =
-            match stats with
-                | NoDraw -> ()
-                | DirectDraw(c, i) ->
-                    // TODO: assuming that DrawIndirects have only 1 instance
-                    Interlocked.Add(&drawCalls, -c) |> ignore
-                    Interlocked.Add(&effectiveCalls, -i) |> ignore
-                | IndirectDraw c ->
-                    Interlocked.Add(&drawCalls, -1) |> ignore
-                    Interlocked.Add(&effectiveCalls, -c) |> ignore
-
-        member x.Add(o : PreparedRenderObject) =
-            added <- added + 1
-            resourceCount <- resourceCount + o.ResourceCount
-            let value = o.DrawCallStats.GetValue x
-            oldValues.[o.DrawCallStats] <- value
-            add value
-
-        member x.Remove(o : PreparedRenderObject) =
-            removed <- removed + 1
-            resourceCount <- resourceCount - o.ResourceCount
-            match oldValues.TryRemove o.DrawCallStats with
-                | (true, old) -> 
-                    lock o.DrawCallStats (fun () -> o.DrawCallStats.Outputs.Remove x |> ignore)
-                    remove old
-                | _ -> ()
-
-        member x.GetValue(caller : IAdaptiveObject) =
-            x.EvaluateAlways' caller (fun dirty ->
-                if x.OutOfDate then
-                    for d in dirty do
-                        let value = d.GetValue x
-                        match oldValues.TryGetValue d with
-                            | (true, old) -> 
-                                remove old
-                                add value
-                            | _ ->
-                                () // removed
-
-                        oldValues.[d] <- value
-                                
-                let add = Interlocked.Exchange(&added, 0) 
-                let rem = Interlocked.Exchange(&removed, 0)
-                { FrameStatistics.Zero with 
-                    DrawCallCount = float drawCalls
-                    EffectiveDrawCallCount = float effectiveCalls 
-                    VirtualResourceCount = float resourceCount
-                    AddedRenderObjects = float add
-                    RemovedRenderObjects = float rem
-                }
-            )
-
-        interface IMod with
-            member x.IsConstant = false
-            member x.GetValue caller = x.GetValue caller :> obj
-
-        interface IMod<FrameStatistics> with
-            member x.GetValue caller = x.GetValue caller
-
-    type RenderTask(man : ResourceManager, fboSignature : IFramebufferSignature, objects : aset<IRenderObject>, config : IMod<BackendConfiguration>, shareTextures : bool, shareBuffers : bool) as this =
-        inherit AbstractOpenGlRenderTask(man, fboSignature, config, shareTextures, shareBuffers)
-        
-        let ctx = man.Context
-        let resources = new Aardvark.Base.Rendering.ResourceInputSet()
+        let ctx = prepared.Manager.Context
         let inputSet = InputSet(this) 
         let resourceUpdateWatch = OpenGlStopwatch()
-        let callStats = RenderObjectStats()
         let structuralChange = Mod.init ()
         
         let primitivesGenerated = OpenGlQuery(QueryTarget.PrimitivesGenerated)
-
-
-        let add (ro : PreparedRenderObject) = 
-            let all = ro.Resources |> Seq.toList
-            for r in all do resources.Add r
-
-            callStats.Add ro
-
-            let old = ro.Activation
-            ro.Activation <- 
-                { new IDisposable with
-                    member x.Dispose() =
-                        old.Dispose()
-                        for r in all do resources.Remove r
-                        callStats.Remove ro
-                }
-            ro
-
-        let rec prepareRenderObject (ro : IRenderObject) =
-            match ro with
-                | :? RenderObject as r ->
-                    new PreparedMultiRenderObject([this.ResourceManager.Prepare(fboSignature, r) |> add])
-
-                | :? PreparedRenderObject as prep ->
-                    new PreparedMultiRenderObject([prep |> PreparedRenderObject.clone |> add])
-
-                | :? MultiRenderObject as seq ->
-                    let all = seq.Children |> List.collect(fun o -> (prepareRenderObject o).Children)
-                    new PreparedMultiRenderObject(all)
-
-                | :? PreparedMultiRenderObject as seq ->
-                    new PreparedMultiRenderObject (seq.Children |> List.map (PreparedRenderObject.clone >> add))
-
-                | _ ->
-                    failwithf "[RenderTask] unsupported IRenderObject: %A" ro
-
-        let preparedObjects = objects |> ASet.mapUse prepareRenderObject
-        let preparedObjectReader = preparedObjects.GetReader()
 
         let mutable subtasks = Map.empty
 
@@ -915,16 +1021,17 @@ module RenderTasks =
                     task
 
 
+        new (man : ResourceManager, fboSignature : IFramebufferSignature, objects : aset<IRenderObject>, config : IMod<BackendConfiguration>, shareTextures : bool, shareBuffers : bool) =
+            let splice (sem : Symbol) : Option<obj> = 
+                None
+            let set = new RenderObjectSet(man, fboSignature, shareTextures, shareBuffers, splice, objects)
+            new RenderTask(fboSignature, config, set)
 
         override x.Perform(fbo : Framebuffer) =
             let mutable stats = FrameStatistics.Zero
-            let deltas = preparedObjectReader.GetDelta x
+            let deltas = preparedReader.GetDelta x
 
             x.ResourceManager.DrawBufferManager.Write(fbo)
-
-            resourceUpdateWatch.Restart()
-            stats <- stats + resources.Update(x)
-            resourceUpdateWatch.Stop()
 
             match deltas with
                 | [] -> ()
@@ -934,10 +1041,10 @@ module RenderTasks =
                 match d with
                     | Add v ->
                         let task = getSubTask v.RenderPass
-                        task.Add v
+                        task.Add (unbox v)
                     | Rem v ->
                         let task = getSubTask v.RenderPass
-                        task.Remove v
+                        task.Remove (unbox v)
 
 
             let mutable current = 0
@@ -960,7 +1067,6 @@ module RenderTasks =
             stats + 
             !this.Scope.stats + 
             (runStats |> List.sumBy (fun l -> l.Value)) +
-            callStats.GetValue() +
             { FrameStatistics.Zero with
                 ResourceUpdateSubmissionTime = resourceUpdateWatch.ElapsedCPU
                 ResourceUpdateTime = resourceUpdateWatch.ElapsedGPU
@@ -969,13 +1075,12 @@ module RenderTasks =
 
 
         override x.Release() =
-            preparedObjectReader.Dispose()
-            resources.Dispose()
+            preparedReader.Dispose()
+            prepared.Dispose()
             for (_,t) in Map.toSeq subtasks do
                 t.Dispose()
 
             subtasks <- Map.empty
-
 
     type ClearTask(runtime : IRuntime, fboSignature : IFramebufferSignature, color : IMod<list<Option<C4f>>>, depth : IMod<Option<float>>, ctx : Context) =
         inherit AbstractRenderTask()

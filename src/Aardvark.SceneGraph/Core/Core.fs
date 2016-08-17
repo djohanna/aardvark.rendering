@@ -20,13 +20,6 @@ type IGroup =
 
 module private Providers =
 
-    type SimpleUniformHolder(values : Map<Symbol, IMod>) =
-        interface IUniformProvider with
-            member x.TryGetUniform (scope,name) = Map.tryFind name values
-            member x.Dispose() = ()
-
-        new (l : list<Symbol * IMod>) = new SimpleUniformHolder(Map.ofList l)
-
     type ScopeDependentUniformHolder(values : Map<Symbol, Scope -> IMod>) =
         let cache = Dictionary<Scope * Symbol, Option<IMod>>()
 
