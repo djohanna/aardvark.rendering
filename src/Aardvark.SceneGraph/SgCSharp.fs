@@ -39,6 +39,12 @@ type SceneGraphExtensions =
     static member ProjTrafo(sg : ISg, proj : IMod<Trafo3d>) = Sg.projTrafo proj sg
 
     [<Extension>]
+    static member Trafo(sg : ISg, modelTrafo : IMod<Trafo3d>) = Sg.trafo modelTrafo sg
+
+    [<Extension>]
+    static member Trafo(sg : ISg, modelTrafo : Trafo3d) = Sg.trafo (Mod.constant modelTrafo) sg
+
+    [<Extension>]
     static member Surface(sg : ISg, surface : ISurface) = Sg.SurfaceApplicator(Mod.constant surface, sg) :> ISg
 
     [<Extension>]
@@ -109,7 +115,7 @@ type SceneGraphExtensions =
     static member Uniform(sg : ISg, uniforms : SymbolDict<IMod>) : ISg = Sg.UniformApplicator(new QuickUniformHolder(uniforms), sg) :> ISg
 
     [<Extension>]
-    static member VertexIndices(sg : ISg, indices : IMod<Array>) : ISg = Sg.VertexIndexApplicator(indices, sg) :> ISg
+    static member VertexIndices(sg : ISg, indices : BufferView) : ISg = Sg.VertexIndexApplicator(indices, sg) :> ISg
 
     [<Extension>]
     static member VertexAttributes(sg : ISg, attributes : SymbolDict<BufferView>) : ISg = Sg.VertexAttributeApplicator(attributes, sg) :> ISg
