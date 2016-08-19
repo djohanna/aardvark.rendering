@@ -2,11 +2,11 @@
 #I @"../../../bin/Debug"
 #I @"../../../bin/Release"
 #load "LoadReferences.fsx"
-#load "FRPAgain.fs"
+#load "FRPAgain.fsx"
+open EventSystem
 #else
 namespace Examples
 #endif
-
 
 open System
 open Aardvark.Base
@@ -179,7 +179,7 @@ module Maya =
         }
 
     type Game = MainScreen | Running of GameState | GameOver
-
+    
     let es = EventStream(Clock.absolute, empty)
 
     let moveTowardsMouse = 

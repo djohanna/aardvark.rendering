@@ -20,10 +20,12 @@ let main args =
     //Examples.PostProcessing.run()
     //Examples.Shadows.run()
     //Examples.GeometrySet.run()
-    Examples.LoD.run()
+    //Examples.LoD.run()
     //Examples.Polygons.run()           attention: this one is currently broken due to package refactoring
     //Examples.TicTacToe.run()          attention: this one is currently broken due to package refactoring
     //Examples.AssimpInterop.run()
     //Examples.Shadows.run()
-    Examples.Maya.run()
+    //Examples.Maya.run()
+    //Examples.Gui.run()
+    EventSystem.Blubb.test()
     0

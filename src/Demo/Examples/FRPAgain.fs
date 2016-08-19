@@ -1,13 +1,8 @@
-﻿#if COMPILED
-namespace EventSystem
-#endif
+﻿namespace EventSystem
 
 open System
 open System.Threading
 open System.Collections.Generic
-//open System.Reactive
-//open System.Reactive.Linq
-//open System.Reactive.Subjects
 open Microsoft.FSharp.Control
 
 type Event<'op> =
@@ -96,7 +91,7 @@ module NewShit =
         let any =
             { new Pattern<'op, unit> with
                 member x.IsMatch(o) =
-                     Match ()
+                        Match ()
             }
 
     
@@ -909,3 +904,381 @@ module NewestShit =
     let run() = 
         //Parser.Parser.test()
         NewShit.test2()
+
+
+
+
+[<AutoOpen>]
+module StateMonad =
+    type State<'s, 'a> =
+        abstract member Run : byref<'s> -> 'a
+
+    module State =
+        let create (v : 'a) =
+            { new State<'s, 'a> with
+                member x.Run(_) = v
+            }
+
+        let map (f : 'a -> 'b) (m : State<'s, 'a>) =
+            { new State<'s, 'b> with
+                member x.Run(s) =
+                    let a = m.Run(&s)
+                    f a
+            }
+
+        let bind (f : 'a -> State<'s, 'b>) (m : State<'s, 'a>) =
+            { new State<'s, 'b> with
+                member x.Run(s) =
+                    let a = m.Run(&s)
+                    (f a).Run(&s)
+            }
+
+        let combine (l : State<'s, unit>) (r : State<'s, 'a>) =
+            { new State<'s, 'a> with
+                member x.Run(s) =
+                    l.Run(&s)
+                    r.Run(&s)
+            }
+
+    type StateBuilder() =
+        member x.Bind(m : State<'s, 'a>, f : 'a -> State<'s, 'b>) = State.bind f m
+        member x.ReturnFrom(s : State<'s, 'a>) = s
+        member x.Return(v) = State.create v
+        member x.Combine(l,r) = State.combine l r
+        member x.Zero = State.create ()
+        member x.Delay(f : unit -> State<'s, 'a>) =
+            { new State<'s, 'a> with
+                member x.Run(s) =
+                    f().Run(&s)
+            }
+
+    let state = StateBuilder()
+
+    let modifyState (f : 's -> 's) : State<'s, 's> =
+        { new State<'s, 's> with
+            member x.Run(state) =
+                state <- f state
+                state
+        }
+
+
+    let private crazyShitFuck<'s, 'a> (f : 's -> 's) : State<'s, 'a> =
+        { new State<'s, 'a> with
+            member x.Run(state) =
+                state <- f state
+                Unchecked.defaultof<'a>
+        }
+
+    let modifyState' (f : 's -> 's) = crazyShitFuck<'s, unit>(f)
+
+
+
+
+module Blubb =
+    open System
+
+    type TimeState<'s> = { userState : 's; time : DateTime }
+    type Behaviour<'s, 'a> = IObservable<State<TimeState<'s>, Option<'a>>>
+
+    type Time = DateTime
+    type Times = DateTime * DateTime
+    
+    type Async<'a> = { runCont : ('a -> unit) -> IDisposable }
+
+
+    type Future<'a> =
+        abstract member Subscribe : ('a -> unit) -> IDisposable
+
+    module Future =
+        let private nop = { new IDisposable with member x.Dispose() = () }
+        let map (f : 'a -> 'b) (m : Future<'a>) =
+            { new Future<'b> with
+                member x.Subscribe cb =
+                    m.Subscribe(fun a -> a |> f |> cb)
+            }
+
+        let create (v : 'a) =
+            { new Future<'a> with
+                member x.Subscribe(cont) =
+                    cont v
+                    nop
+            }
+
+        let ofObservable (o : IObservable<'a>) =
+            { new Future<'a> with
+                member x.Subscribe(cont) =
+                    let self = ref nop
+                    self :=
+                        o.Subscribe (fun v ->
+                            cont v
+                            self.Value.Dispose()
+                            self := nop
+                        )
+                    { new IDisposable with member x.Dispose() = self.Value.Dispose() }
+            }
+
+    type ICont<'s, 'a> =
+        abstract member Run :  Time -> State<'s, Choice<'a, Future<ICont<'s, 'a>>>>
+
+    type TimeFuture<'s>(next : ICont<'s, unit>)  =
+        interface Future<ICont<'s, unit>> with
+            member x.Subscribe(f) = failwith ""
+
+        member x.Cont = next
+
+
+    module Cont =
+        let rec ignore (m : ICont<'s, 'a>) =
+            { new ICont<'s, unit> with
+                member x.Run(e) =
+                    state {
+                        let! c = m.Run(e)
+                        match c with
+                            | Choice2Of2 cont -> 
+                                return cont |> Future.map ignore |> Choice2Of2
+                            | Choice1Of2 _ ->
+                                return Choice1Of2 ()
+                    }
+            }
+        let rec bind (f : 'a -> ICont<'s, 'b>) (m : ICont<'s, 'a>) =
+            { new ICont<'s, 'b> with
+                member x.Run now =
+                    state {
+                        let! v = m.Run now
+                        match v with
+                            | Choice1Of2 v -> 
+                                return! (f v).Run now
+                            | Choice2Of2 c ->
+                                return c |> Future.map (fun v -> bind f v) |> Choice2Of2
+                    }
+            }
+
+        let continuous (f : Time -> Time -> 's -> 's) : ICont<'s, unit> =
+            let rec cont (last : Time) =
+                { new ICont<'s, unit> with
+                    member x.Run(current) =
+                        state {
+                            let! _ = modifyState (f last current)
+                            return TimeFuture(cont current) :> Future<_> |> Choice2Of2
+                        }
+                }
+
+            { new ICont<'s, unit> with
+                member x.Run(initial) = 
+                    state {
+                        return TimeFuture(cont initial) :> Future<_> |> Choice2Of2
+                    }
+            }
+
+        let once (f : State<'s, 'a>) =
+            { new ICont<'s, 'a> with
+                member x.Run(_) =
+                    state {
+                        let! v = f
+                        return Choice1Of2 v       
+                    }
+            }
+
+        let rec combine (l : ICont<'s, unit>) (r : ICont<'s, 'a>) =
+            { new ICont<'s, 'a> with
+                member x.Run(t) =
+                    state {
+                        let! a = l.Run t
+                        match a with
+                            | Choice1Of2 () -> return! r.Run t //Future.create r |> Choice2Of2
+                            | Choice2Of2 cont -> return cont |> Future.map (fun l -> combine l r) |> Choice2Of2
+                    }
+            }
+
+        let rec forever (c : ICont<'s, unit>) =
+            { new ICont<'s, unit> with
+                member x.Run(t) =
+                    state {
+                        let! cont = c.Run t 
+                        match cont with
+                            | Choice1Of2 () -> 
+                                return x |> Future.create |> Choice2Of2
+                            | Choice2Of2 cont ->
+                                return cont |> Future.map (fun cont -> combine cont x) |> Choice2Of2
+                    }
+            }
+//        let rec map (f : 'a -> 's -> 's) (m : ICont<'a>) : ICont<'s -> 's> =
+//            { new ICont<'s, > with
+//                member x.Run(t) =
+//                    match m.Run(t) with
+//                        | Choice1Of2 v -> once (fun s -> f v s) |> Future.create |> Choice2Of2
+//                        | Choice2Of2 c -> c |> Future.map (fun a -> map f a) |> Choice2Of2
+//            }
+//
+//        let rec forever (c : ICont<'s -> 's>) =
+//            { new ICont<'s -> 's> with
+//                member x.Run(t) =
+//                    match c.Run t with
+//                        | Choice1Of2 v ->
+//                            forever c |> map (fun f s -> c s) |> Future.create |> Choice2Of2
+//                        | Choice2Of2 v ->
+//                            
+//            }
+
+    type MainLoop<'s>(l : list<ICont<'s, unit>>, initial : 's) =
+        let mutable state = initial
+        let queue = new System.Collections.Generic.Queue<_>()
+        do for e in l do queue.Enqueue e
+        
+        member x.State = state
+
+        member x.Step(now : DateTime) =
+            let next = System.Collections.Generic.List<_>()
+            while queue.Count > 0 do
+                let v =  queue.Dequeue()
+                let res = v.Run(now).Run(&state)
+                match res with
+                    | Choice2Of2 cont -> 
+                        match cont with
+                            | :? TimeFuture<'s> as f ->
+                                next.Add(f.Cont)
+                            | _ ->
+                                cont.Subscribe(queue.Enqueue) |> ignore
+                    | Choice1Of2 () ->
+                        ()
+         
+
+            for n in next do queue.Enqueue n
+
+
+
+    let test() =
+        
+        let mutable last = DateTime.Now
+        let f = 
+            Cont.continuous (fun o n s -> 
+                let dt = (n - o).TotalSeconds
+                if o <> last then printfn "JS"
+                last <- n
+                s + dt * 0.1
+
+            )
+
+        
+        let win = new System.Windows.Forms.Form()
+        win.Width <- 1024
+        win.Height <- 768
+        let b = new System.Windows.Forms.Button()
+        win.Controls.Add b
+        b.Text <- "sajkldnjkas"
+
+        let click = 
+            { new ICont<'s, EventArgs> with
+                member x.Run(_) = 
+                    state {
+                        let re = Future.ofObservable b.Click
+                        return re |> Future.map (fun e -> Cont.once (state { return e })) |> Choice2Of2
+                    }
+            }
+
+
+        let run = Cont.bind (fun eargs -> Cont.once (modifyState' (fun s -> printfn "asda"; s + 1.0))) click
+
+
+
+        let loop = MainLoop<float>([f; Cont.forever run], 0.0)
+
+
+        System.Windows.Forms.Application.Idle.Add (fun _ -> 
+            loop.Step(DateTime.Now)
+            printfn "%A" loop.State
+        )
+        //win.Show()
+        //Console.ReadLine() |> ignore
+        System.Windows.Forms.Application.Run(win)
+
+
+//
+//    type Wait<'a, 'b>(o : Future<'a>, f : 'a -> ICont<'b>) =
+//        member x.Event = o
+//        member x.F = f
+//        interface ICont<'b> with
+//            member x.Run() = o.Select(fun v -> f v) |> Choice2Of2
+//
+//    type Result<'a> (v : 'a) =
+//        member x.Value = v
+//        interface ICont<'a> with
+//            member x.Run() =  v |> Choice1Of2
+
+
+
+
+
+
+
+
+//    type BehaviourBuilder() =
+//        member x.Bind(m : Behaviour<'s, 'a>, f : 'a -> Behaviour<'s, 'b>) : Behaviour<'s, 'b> =
+//            Observable.Create(fun (obs : IObserver<State<TimeState<'s>, Option<'b>>>) ->
+//                let self = ref Unchecked.defaultof<_>
+//                self := m.Subscribe { 
+//                    new IObserver<State<TimeState<'s>, Option<'a>>> with
+//                        member x.OnNext(v) =
+//                            let res =
+//                                state {
+//                                    let! r = v
+//                                    match r with
+//                                        | Some res -> 
+//                                            let inner = f res
+//                                            self := inner.Subscribe obs
+//                                            return None
+//                                        | None -> return None
+//                                }
+//                            obs.OnNext res
+//
+//                        member x.OnCompleted() = ()
+//                        member x.OnError(e) = ()    
+//                }
+//
+//                { new IDisposable with
+//                    member x.Dispose() = self.Value.Dispose()
+//                }
+//            )
+//
+
+    // for a in evt do
+    //    ()
+
+
+    // while true do
+    //   let! a = evt
+    //   ()
+
+//
+//    type Runner<'s>(l : list<Behaviour<'s, unit>>, state : 's) =
+//        
+//        let time = new Subject<DateTime * DateTime>()
+//        let creationState = { userState = state; time = DateTime.Now }
+//
+//        let rec merge (l : list<_>) =
+//            match l with
+//                | [] -> failwith ""
+//                | [s] -> s
+//                | h :: t ->
+//                    Observable.merge (merge t) h
+//
+//        let all = merge l
+//
+//        member x.Run() = 
+//            let mutable currentState = { userState = state; time = DateTime.Now }
+//
+//            let pending = new System.Collections.Concurrent.BlockingCollection<_>()
+//
+//            let subscription = all.Subscribe (fun v -> pending.Add(v))
+//
+//            let mutable now = DateTime.Now
+//            while true do
+//                let f = pending.Take()
+//                currentState <- { currentState with time = DateTime.Now }
+//                f.Run(&currentState) |> ignore
+//
+//
+//
+//            subscription
+
+

@@ -3,3 +3,11 @@ Aardvark.Base.Runtime
 AssimpNet
 FShade.Core
 Poly2Tri
+Aether
+
+Eto.Forms
+Eto.Platform.Windows
+Eto.Platform.Direct2D
+Newtonsoft.Json
+Eto.Serialization.Json
+Eto.Serialization.Xaml
