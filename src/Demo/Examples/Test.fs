@@ -12,24 +12,6 @@ open FSharp.Quotations.DerivedPatterns
 
 [<ReflectedDefinition>]
 module Nat =
-    type Head = 
-        abstract member Check : bool
-        abstract member Infer : (unit -> unit) -> unit
-    type True() = 
-        interface Head with
-            member x.Check = true
-            member x.Infer _ = ()
-    type Rule<'a>([<ReflectedDefinition>]v : 'a) = 
-        interface Head with
-            member x.Check = true
-            member x.Infer _ = ()
-    type And<'a,'b>(r : Rule<'a>, l : Rule<'b>) = 
-        interface Head with
-            member x.Check = true
-            member x.Infer _ = ()
-
-    type Rule = Head * (unit -> unit) // check head and reduction
-    
     exception NoMatch
 
     [<ReflectedDefinition>]
@@ -38,18 +20,15 @@ module Nat =
 
     let (!?) (v : obj) : bool = failwith "first stage"
 
-    let (&&&) l r = And(Rule l,Rule r)
-    let True = True()
     let solve (binder : 'a -> 'b) = ()
     
     type N = interface end
     type Z() = interface N
-    let Z = Z() 
-
     type Succ<'s when 's :> N> = Succ of 's interface N
 
     type Sum<'a,'b,'c when 'a :> N and 'b :> N and 'c :> N> = Sum of 'a * 'b * 'c
     type Addition() =
+
         member x.Sum (Z : Z, M : N) = 
             true ==> Sum(Z, M, M)
 
@@ -67,41 +46,29 @@ module Nat =
             (!?(Prod(N,M,K)) && !?(Sum (K,M,P))) ==>
                 Prod (Succ(N), M, P) 
 
-    let test = solve ( fun (r : N) -> Sum(Z, Z, r) )
   
 open System
 open Aardvark.Base
-type Universe = HashMap<System.Type,PersistentHashSet<obj>>
+type Universe = list<obj>
 
 [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
 module Universe = 
     
 
-    let empty : Universe = HashMap.empty
+    let empty : Universe = []
     let get (t : Type) (u : Universe)  =
-        match HashMap.tryFind t u with
-            | Some vs -> [ for s in PersistentHashSet.toSeq vs do yield Expr.Value(s,t) ]
-            | None -> []
+        u |> List.filter (fun o -> 
+            t.IsAssignableFrom(o.GetType())
+        )
 
-    let add (t : Type) (v : obj) (u : Universe) =
-        match HashMap.tryFind t u with
-            | Some xs -> HashMap.add t (PersistentHashSet.add v xs) u
-            | None -> HashMap.add t (PersistentHashSet.ofList [v]) u
-
-    let add' (v : obj) (u : Universe) =
-        add ( v.GetType() ) v u 
-
-    let add'' (v : obj, t : System.Type) (u : Universe) =
-        add t v u 
+    let add (v : obj) (u : Universe) =
+        v :: u
 
     let addMany xs (u:Universe) =
-        List.fold (flip add') u xs
+        List.fold (flip add) u xs |> System.Collections.Generic.HashSet |> Seq.toList
 
     let find (v : Var) (u : Universe)  =
-        printfn "trying to find type: %A" v.Type
-        match HashMap.tryFind v.Type u with
-            | Some s -> PersistentHashSet.toList s
-            | None -> []
+        get v.Type u
 
     let rec instantiate (xs : list<Var>) (u : Universe) : list<list<Var*obj>> =   
         match xs with
@@ -116,7 +83,7 @@ module Universe =
     let instantiateMap (xs : list<Var>) (u : Universe) =   
         instantiate xs u |> List.map Map.ofList
 
-    let ofList = List.fold (flip add'') empty
+    let ofList = List.fold (flip add) empty
 
 [<AutoOpen>]
 module Logics = 
@@ -136,8 +103,8 @@ module Logics =
 
     let u =
         [
-            1 :> obj, typeof<int>; 
-            1.0 :> obj , typeof<float>
+            1 :> obj
+            1.0 :> obj
         ] |> Universe.ofList
 
     let rec replaceEval (reducer : Expr) (e : Expr) : Expr =
@@ -204,8 +171,7 @@ module Logics =
     open Nat
     let numerals =
         [
-            Nat.Z :> obj, typeof<Nat.Z>
-            Nat.Z :> Nat.N :> obj, typeof<Nat.N>
+            Nat.Z() :> obj
         ] |> Universe.ofList
 
     let sum = 
@@ -214,7 +180,7 @@ module Logics =
                  true ==> Sum(Z, M, M)
             @@>;
             <@@ fun this (N : N, M : N, K : N) -> 
-                 (!? ( Sum (N, M, K) ))  ==> Sum ( Succ N, N, Succ K ) 
+                 (!? (Sum (N, M, K) ))  ==> Sum ( Succ N, N, Succ K ) 
             @@>
         ]
 
@@ -224,7 +190,10 @@ module Logics =
 
 
     let test () =
-        stepRules sum numerals |> printfn "after Step: %A"
+        let once = stepRules sum numerals
+        let twice = stepRules sum once
+        let thrice = stepRules sum twice
+        printfn "%A" twice
         Console.ReadLine()
 
 

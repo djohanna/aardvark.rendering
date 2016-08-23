@@ -28,5 +28,5 @@ let main args =
     //Examples.Maya.run()
     //Examples.Gui.run()
     //EventSystem.Blubb.test()
-    Logics.Logics.test()
+    Logics.Logics.test() |> ignore
     0
