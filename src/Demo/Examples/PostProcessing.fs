@@ -41,6 +41,18 @@ module PostProcessing =
     let pointSize = Mod.init 50.0
     let pointCount = 2048
 
+    let sceneA = Mod.init 10
+    let sceneB = Mod.init 10
+
+    let scene =
+        adaptive {
+            let! p = pointSize
+            if p < 0.5 then 
+                return! sceneA 
+            else 
+                return! sceneB
+        }
+
     let pointSg = 
         let rand = Random()
         let randomV3f() = V3f(rand.NextDouble(), rand.NextDouble(), rand.NextDouble())
@@ -172,6 +184,8 @@ module PostProcessing =
             |> Sg.effect [Shaders.gaussY |> toEffect]
             |> Sg.compile win.Runtime win.FramebufferSignature
             |> RenderTask.renderToColor win.Sizes
+
+
 
     // we could now render the blurred result to a texutre too but for our example
     // we can also render it directly to the screen.

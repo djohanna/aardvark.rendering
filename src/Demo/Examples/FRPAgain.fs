@@ -1120,7 +1120,7 @@ module Blubb =
 //                            
 //            }
 
-    type MainLoop<'s>(l : list<ICont<'s, unit>>, initial : 's) =
+    type MainLoop<'s>(l : list<ICont<'s, unit>>,  initial : 's) =
         let mutable state = initial
         let queue = new System.Collections.Generic.Queue<_>()
         do for e in l do queue.Enqueue e
@@ -1280,5 +1280,4 @@ module Blubb =
 //
 //
 //            subscription
-
 

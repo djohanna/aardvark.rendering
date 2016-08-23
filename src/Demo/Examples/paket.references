@@ -5,6 +5,8 @@ FShade.Core
 Poly2Tri
 Aether
 
+FSharp.Quotations.Evaluator
+
 Eto.Forms
 Eto.Platform.Windows
 Eto.Platform.Direct2D

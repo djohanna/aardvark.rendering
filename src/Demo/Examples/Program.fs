@@ -27,5 +27,6 @@ let main args =
     //Examples.Shadows.run()
     //Examples.Maya.run()
     //Examples.Gui.run()
-    EventSystem.Blubb.test()
+    //EventSystem.Blubb.test()
+    Logics.Logics.test()
     0

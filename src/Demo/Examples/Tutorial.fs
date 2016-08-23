@@ -52,7 +52,7 @@ module Tutorial =
     let quadSg =
         let quad =
             let index = [|0;1;2; 0;2;3|]
-            let positions = [|V3f(-1,-1,0); V3f(1,-1,0); V3f(1,1,0); V3f(-1,1,0) |]
+            let positions = [|V3f(-1,-2,0); V3f(1,-1,0); V3f(2,1,0); V3f(-1,1,0) |]
 
             IndexedGeometry(IndexedGeometryMode.TriangleList, index, SymDict.ofList [DefaultSemantic.Positions, positions :> Array], SymDict.empty)
 
