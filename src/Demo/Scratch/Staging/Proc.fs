@@ -265,7 +265,9 @@ and Assertion<'s, 'a> =
     private
         | That of list<Proc<'s, 'a>>
 
-type Value<'s, 'a> = { current : 'a; next : Option<Proc<'s, Value<'s, 'a>>> }
+and Controller<'s> = { proc : Proc<'s,unit> }
+
+type Value<'s, 'a> = { current : 'a; next : Proc<'s, Value<'s, 'a>> }
 
 [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
 module Event =
@@ -537,9 +539,11 @@ module Proc =
         )
 
     let repeat (inner : Proc<'s, unit>) =
-        fix (fun self ->
-            append inner (delay (fun () -> !self))
-        )
+        { proc = 
+            fix (fun self ->
+                append inner (delay (fun () -> !self))
+            )
+        }
 
     let choose (f : 'a -> Option<'b>) (m : Proc<'s, 'a>) =
         fix (fun self ->
@@ -669,20 +673,12 @@ module Proc =
             
             state.userState
 
+    /// DIFFERENT
     let toMod (adjustTime : Time -> Time) (s : 's) (p : Proc<'s,unit>) =
         Runner<'s>(adjustTime, s, p) :> IMod<_>
 
     let inline ignore (m : Proc<'s, 'a>) =
         map ignore m
-
-//
-//    let rec bindValue' (f : 'a -> Proc<'s, unit>) (m : Value<'s, 'a>) : Value<'s, 'x> =
-//        let current = m.current |> f
-//        choice current m.next |> bind (fun r ->
-//            match r with
-//                | Choice1Of2 () -> m.next |> bind (fun v -> bindValue f v)
-//                | Choice2Of2 v -> bindValue f v
-//        )
 
     let nextValue (m : IMod<'a>) : Proc<'s, 'a> =
         { run =
@@ -690,31 +686,40 @@ module Proc =
                 return Continue(Pattern.ofMod m, fun v -> v |> unbox<'a> |> value)
             }
         }
+    let force (m : IMod<'a>) : Proc<'s, 'a> =
+        { run =
+            state {
+                return Finished(Mod.force m)
+            }
+        }
 
-    let rec bindValue (f : 'a -> Proc<'s, 'b>) (m : Value<'s, 'a>) : Proc<'s, 'b> =
+    let rec foreachValue (f : 'a -> Proc<'s, 'b>) (m : Value<'s, 'a>) : Controller<'s> =
         let current = m.current |> f
-        match m.next with
-            | None -> current
-            | Some n ->
-                choice current n |> bind (fun r ->
-                    match r with
-                        | Choice1Of2 _ -> n |> bind (fun v -> bindValue f v)
-                        | Choice2Of2 v -> bindValue f v
-                )
+        let n = m.next 
+        { proc = 
+            choice current n |> bind (fun r ->
+                match r with
+                    | Choice1Of2 _ -> n |> bind (fun v -> (foreachValue f v).proc)
+                    | Choice2Of2 v -> (foreachValue f v).proc
+            )
+        }
 
-    let rec bindMod (f : 'a -> Proc<'s, unit>) (m : IMod<'a>) : Proc<'s, 'b> =
+    let rec bindMod (f : 'a -> Proc<'s, unit>) (m : IMod<'a>) : Controller<'s> =
         let current = m |> Mod.force |> f
-        choice current (nextValue m) |> bind (fun r ->
-            match r with
-                | Choice1Of2 () -> (nextValue m) |> bind (fun v -> bindMod f m)
-                | Choice2Of2 v -> bindMod f m
-        )
+        { proc = 
+            choice current (nextValue m) |> bind (fun r ->
+                match r with
+                    | Choice1Of2 () -> (nextValue m) |> bind (fun v -> (bindMod f m).proc)
+                    | Choice2Of2 v -> (bindMod f m).proc
+            )
+        }
 
     let rec fold (f : 'x -> 'a -> 'x) (initial : 'x) (m : Proc<'s, 'a>) : Value<'s, 'x> =
         { 
             current = initial
-            next = m |> map (fun v -> (fold f (f initial v) m)) |> Some
+            next = m |> map (fun v -> (fold f (f initial v) m)) 
         }
+
 
 
 
@@ -728,7 +733,10 @@ module ``Proc Builders`` =
     let inline (.>=) a b = a |> Proc.filter (fun a -> a >= b)
     let inline (.<=) a b = a |> Proc.filter (fun a -> a >= b)
 
-    type ProcBuilder<'s, 'a, 'r> = private { build : Proc<'s, 'r> -> Proc<'s, 'a> }
+    //type ProcBuilder<'s, 'a, 'r> = private { build : Proc<'s, 'r> -> Proc<'s, 'a> }
+    type Magic<'a, 'r> = private { build : 'r -> 'a }
+    type ProcBuilder<'s, 'a, 'r> = Magic<Proc<'s, 'a>, Proc<'s, 'r>>
+    type ControllerBuilder<'s> = Magic<Controller<'s>, Controller<'s>>
 
     type NewProcBuilder() =
         let lift (f : 'a -> 'b) (m : State<'s, 'a>) =
@@ -754,16 +762,6 @@ module ``Proc Builders`` =
         member x.Bind(m : Event<'a>, f : 'a -> ProcBuilder<'s, 'b, 'r>) =
             { build = fun self ->
                 m |> Proc.ofEvent |> Proc.bind (fun v -> f(v).build self)
-            }
-
-        member x.Bind(m : Value<'s, 'a>, f : 'a -> ProcBuilder<'s, unit, 'r>) =
-            { build = fun self ->
-                m |> Proc.bindValue (fun v -> f(v).build self)
-            }
-
-        member x.Bind(m : IMod<'a>, f : 'a -> ProcBuilder<'s, unit, 'r>) =
-            { build = fun self ->
-                m |> Proc.bindMod (fun v -> f(v).build self)
             }
 
         member x.Bind(m : State<'s, 'a>, f : 'a -> ProcBuilder<'s, 'b, 'r>) =
@@ -846,8 +844,7 @@ module ``Proc Builders`` =
 
     let self = { build = fun self -> self }
 
-
-    type ProcBuilder() =
+    type ControllerBuilder() =
         let lift (f : 'a -> 'b) (m : State<'s, 'a>) =
             { new State<ProcState<'s>, 'b>() with
                 member x.Run(state) =
@@ -858,87 +855,39 @@ module ``Proc Builders`` =
                     v
             }
 
-        member x.Bind(m : Event<'a>, f : 'a -> Proc<'s, 'b>) =
-            Proc.bind f (Proc.ofEvent m)
+        member x.For(m : Value<'s, 'a>, f : 'a -> Proc<'s,unit>) =
+            m |> Proc.foreachValue f
 
-        member x.Bind(m : Proc<'s, 'a>, f : 'a -> Proc<'s, 'b>) =
-            Proc.bind f m
+        member x.For(m : Proc<'s, 'a>, f : 'a -> Proc<'s,unit>) =
+            Proc.repeat (m |> Proc.bind f) 
 
-        member x.Bind(m : Value<'s, 'a>, f : 'a -> Proc<'s, unit>) =
-            Proc.bindValue f m
-
-        member x.Bind(m : IMod<'a>, f : 'a -> Proc<'s, unit>) =
-            Proc.bindMod f m
-
-
-        member x.Bind(m : State<'s, 'a>, f : 'a -> Proc<'s, 'b>) =
-            Proc.bind f { run = m |> lift Finished }
-
-        member x.Bind(m : 's -> 's, f : unit -> Proc<'s, 'b>) =
-            Proc.bind f { run = m |> State.modify |> lift Finished }
-
-        member x.Return(v : 'a) = 
-            Proc.value v
-
-        member x.ReturnFrom(sf : Proc<'s, 'a>) =
-            sf
-//
-//        member x.ReturnFrom(sf : Event<'a>) =
-//            Proc.ofEvent sf
-//
-//        member x.ReturnFrom(s : State<'s, 'a>) =
-//            { run = s |> lift Finished }
-
-        member x.TryWith(m : Assertion<'s,'x> * Proc<'s, 'a>, comp : 'x -> Proc<'s, 'a>) : Proc<'s, 'a> =
-            let (That assertions), body = m
-
-            let guard = 
-                match assertions with
-                    | [a] -> a
-                    | _ -> assertions |> Proc.any
-
-            Proc.choice guard body |> Proc.bind (fun v ->
-                match v with
-                    | Choice1Of2 v -> comp v
-                    | Choice2Of2 v -> Proc.value v
-            )
-
-        member x.Bind(b : Assertion<'s, 'x>, m : unit -> Proc<'s, 'a>) =
-            b, m()
-
-        member x.Delay(f : unit -> Assertion<'s, 'x> * Proc<'s, 'a>) = f()
-
-        member x.For(m : Proc<'s, 'a>, f : 'a -> Proc<'s, unit>) : Proc<'s, unit> =
-            Proc.foreach m f
-
-        member x.For(m : Event<'a>, f : 'a -> Proc<'s, unit>) : Proc<'s, unit> =
-            Proc.foreach (Proc.ofEvent m) f
-
-        member x.While(guard : unit -> Proc<'s, bool>, body : Proc<'s, unit>) =
-            Proc.repeatWhile (guard()) body
-
-        member x.While(guard : unit -> bool, body : Proc<'s, unit>) =
-            Proc.repeatWhile { run = state { return guard() |> Finished } } body
-
-        member x.While(guard : unit -> Event<bool>, body : Proc<'s, unit>) =
-            Proc.repeatWhile (Proc.ofEvent (guard())) body
-
-
-        member x.Delay(f : unit -> Proc<'s, 'a>) =
-            { run =
-                state {
-                    return! f().run
-                }
-            }
-
-
-        member x.Combine(l : Proc<'s, unit>, r : Proc<'s, 'a>) =
-            Proc.append l r
+        member x.For(m : IMod<'a>, f : 'a -> Proc<'s, unit>) =
+            m |> Proc.bindMod f
 
         member x.Zero() = Proc.value ()
 
-    let proc = NewProcBuilder()
+        member x.Delay(f : unit -> Proc<'s, 'a>) = Proc.delay f
+        
+        member x.Delay(f : unit -> Controller<'s>) = { proc = Proc.delay (fun () -> f().proc) }
 
+        member x.Bind(m : Proc<'s, 'a>, f : 'a -> Controller<'s>) =
+            { proc = Proc.bind (fun v -> (f v).proc) m }
+
+        member x.Combine(l : Proc<'s,unit>, r : Controller<'s>) =
+            { proc = Proc.append l r.proc }
+
+        member x.Bind(m : 's -> 's, f : unit -> Proc<'s, 'b>) =
+            { run = m |> State.modify |> lift Finished } |> Proc.bind f
+
+        member x.Return(u : unit) = Proc.value ()
+
+        member x.Combine(l : Proc<'s,unit>, r : Proc<'s,'a>) =
+            Proc.append l r 
+
+            
+
+    let proc = NewProcBuilder()
+    let controller = ControllerBuilder()
     let until (v : list<Proc<'s, 'a>>) = That v
 
     let asdasd (v : Proc<'x, int>) (move : Event<V2i>) =
@@ -954,35 +903,35 @@ module ``Proc Builders`` =
                 return 2
         }
 
-
-[<AutoOpen>]
-module ``Extendend Proc Stuff`` =
-
-    type ProcStartStopBuilder<'s>(run : Proc<'s, unit> -> Proc<'s, unit>) =
-        inherit ProcBuilder()
-
-        member x.Run(m : Proc<'s, unit>) =
-            run m
-        
-
-    [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
-    module Proc =
-        let startStop (start : Proc<'s, _>) (stop : Proc<'s, _>) =
-            ProcStartStopBuilder<'s>(fun body ->
-                start |> Proc.bind (fun _ ->
-                    Proc.fix (fun self ->
-                        Proc.choice stop body |> Proc.bind (fun r ->
-                            match r with
-                                | Choice1Of2 v -> Proc.value ()
-                                | Choice2Of2 () -> !self
-                        )
-                    )
-                ) |> Proc.repeat
-            )
-
-
-        let fix (body : Proc<'s, 'a> -> Proc<'s, 'a>) : Proc<'s, 'a> =
-            let r = ref Unchecked.defaultof<_>
-            let self = Proc.delay (fun () -> !r)
-            r := body self
-            !r
+//
+//[<AutoOpen>]
+//module ``Extendend Proc Stuff`` =
+//
+//    type ProcStartStopBuilder<'s>(run : Proc<'s, unit> -> Proc<'s, unit>) =
+//        inherit ProcBuilder()
+//
+//        member x.Run(m : Proc<'s, unit>) =
+//            run m
+//        
+//
+//    [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
+//    module Proc =
+//        let startStop (start : Proc<'s, _>) (stop : Proc<'s, _>) =
+//            ProcStartStopBuilder<'s>(fun body ->
+//                start |> Proc.bind (fun _ ->
+//                    Proc.fix (fun self ->
+//                        Proc.choice stop body |> Proc.bind (fun r ->
+//                            match r with
+//                                | Choice1Of2 v -> Proc.value ()
+//                                | Choice2Of2 () -> !self
+//                        )
+//                    )
+//                ) |> Proc.repeat
+//            )
+//
+//
+//        let fix (body : Proc<'s, 'a> -> Proc<'s, 'a>) : Proc<'s, 'a> =
+//            let r = ref Unchecked.defaultof<_>
+//            let self = Proc.delay (fun () -> !r)
+//            r := body self
+//            !r
