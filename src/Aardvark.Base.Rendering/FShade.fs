@@ -304,6 +304,38 @@ module FShadeInterop =
             ]
 
         member x.Effect = effect
+       
+        member x.GenerateWithConfig(glslConfig : CompilerConfiguration, signature : IFramebufferSignature) =
+            let compileEffect = GLSL.compileEffect glslConfig
+
+            let needed =
+                signature.ColorAttachments 
+                    |> Map.toList
+                    |> List.map (fun (_,(s,f)) ->
+                        match defaultSemanticTypes.TryGetValue s with
+                            | (true, t) -> s.ToString(), t
+                            | _ -> s.ToString(), formatToExpectedType f.format
+                        )
+                    |> Map.ofList
+            match effect |> compileEffect needed with
+                | Success(map, code) ->
+                    let semanticMap = SymDict.empty
+
+                    for KeyValue(k,v) in map do
+                        if not v.IsSamplerUniform then
+                            uniforms.[Symbol.Create(k)] <- (v.Value |> unbox<IMod>)
+                        else
+                            let sem, sam = v.Value |> unbox<string * SamplerState>
+                            semanticMap.[Sym.ofString k] <- Sym.ofString sem
+                            samplerStates.[Sym.ofString sem] <- toSamplerStateDescription sam
+                            ()
+
+                    let bs = getOrCreateSurface code 
+                    let final =
+                        BackendSurface(bs.Code, bs.EntryPoints, uniforms, 
+                                       samplerStates, semanticMap, glslConfig.expectRowMajorMatrices) 
+                    Success final
+                | Error e -> Error e
 
         interface IGeneratedSurface with
             member x.Generate (r : IRuntime, signature : IFramebufferSignature) =
@@ -313,37 +345,10 @@ module FShadeInterop =
                         | _ ->
                             match tryGetGlslConfig r with
                                 | Some glslConfig ->
-
-                                    let compileEffect =
-                                        GLSL.compileEffect glslConfig
-
-                                    let needed =
-                                        signature.ColorAttachments 
-                                            |> Map.toList
-                                            |> List.map (fun (_,(s,f)) ->
-                                                match defaultSemanticTypes.TryGetValue s with
-                                                    | (true, t) -> s.ToString(), t
-                                                    | _ -> s.ToString(), formatToExpectedType f.format
-                                               )
-                                            |> Map.ofList
-                                    match effect |> compileEffect needed with
-                                        | Success(map, code) ->
-                                            let semanticMap = SymDict.empty
-
-                                            for KeyValue(k,v) in map do
-                                                if not v.IsSamplerUniform then
-                                                    uniforms.[Symbol.Create(k)] <- (v.Value |> unbox<IMod>)
-                                                else
-                                                    let sem, sam = v.Value |> unbox<string * SamplerState>
-                                                    semanticMap.[Sym.ofString k] <- Sym.ofString sem
-                                                    samplerStates.[Sym.ofString sem] <- toSamplerStateDescription sam
-                                                    ()
-
-                                            let bs = getOrCreateSurface code 
-                                            let result = BackendSurface(bs.Code, bs.EntryPoints, uniforms, samplerStates, semanticMap, glslConfig.expectRowMajorMatrices) 
-                                            cache.[signature] <- result
-                                            result
-    
+                                    match x.GenerateWithConfig(glslConfig,signature) with
+                                        | Success backendSurface->
+                                            cache.[signature] <- backendSurface
+                                            backendSurface
                                         | Error e -> 
                                             failwithf "could not compile shader for GLSL: %A" e
                                 | None ->

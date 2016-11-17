@@ -4,3 +4,6 @@ AssimpNet
 FShade.Core
 Clipper
 Poly2Tri
+Suave
+FsPickler
+FsPickler.Json

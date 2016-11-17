@@ -2636,6 +2636,10 @@ module Camera =
 [<STAThread>]
 let main args = 
     Aardvark.Init()
+
+    Aardvark.Rendering.Web.Test.run()
+    System.Environment.Exit 0
+
     Aardvark.SceneGraph.IO.Loader.Assimp.initialize ()
 
     use app = new OpenGlApplication()
