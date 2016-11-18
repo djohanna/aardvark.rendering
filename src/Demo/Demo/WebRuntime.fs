@@ -101,6 +101,7 @@ module Test =
     open Aardvark.Application
     open Aardvark.Application.WinForms
     open Aardvark.Rendering.GL
+    open Chiron
 
     type TypeName = string
     type WebDrawCall =
@@ -108,26 +109,52 @@ module Test =
             firstIndex : int
             baseVertex : int
             faceVertexCount : int 
-        }
+        } with
+            static member ToJson(a : WebDrawCall) = json {
+                    do! Json.write "firstIndex" a.firstIndex
+                    do! Json.write "baseVertex" a.baseVertex
+                    do! Json.write "faceVertexCount" a.faceVertexCount
+                }
+
+
     type WebBuffer = 
         {
             typeName : TypeName
             offset : int
             stride : int
-            value  : System.Array
-        }
+            value  : byte[]
+        } with
+            static member ToJson(a : WebBuffer) = json {
+                    do! Json.write "typeName" a.typeName
+                    do! Json.write "offset" a.offset
+                    do! Json.write "stride" a.stride
+                    do! Json.write "value" Json.ar
+                }
     type Uniform =
         {
             typeName : TypeName
             value    : string
-        }
+        } with 
+            static member ToJson(a : Uniform) = json {
+                    do! Json.write "typeName" a.typeName
+                    do! Json.write "value" a.value
+                }
+
     type WebPreparedObj =
         {
             uniforms     : array<string * Uniform>
             vertexInputs : array<string * WebBuffer>
             drawCall     : WebDrawCall
             shader       : string
-        }
+        } with 
+            static member ToJson(a : WebPreparedObj) = json {
+                    do! Json.write "typeName" a.uniforms
+                    do! Json.write "vertexInputs" a.vertexInputs
+                    do! Json.write "drawCall" a.drawCall
+                    do! Json.write "shader" a.shader
+                }
+
+
 
     let run () = 
 
@@ -218,7 +245,7 @@ module Test =
 
         printfn "%A" ros
 
-        let json = Nessos.FsPickler.Json.FsPickler.CreateJsonSerializer()
+        let json = Nessos.FsPickler.Json.FsPickler.CreateJsonSerializer(true,true)
 
         let echo (webSocket : WebSocket) =
             fun cx -> socket {
