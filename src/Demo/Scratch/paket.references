@@ -4,3 +4,7 @@ AssimpNet
 FShade.Core
 FSharp.Quotations.Evaluator
 Fablish
+
+
+nuget Another.Unofficial.Xilium.CefGlue
+nuget Another.Unofficial.Xilium.CefGlue.UnpackNativeDependencies
