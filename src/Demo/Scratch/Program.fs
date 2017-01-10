@@ -250,7 +250,8 @@ let main argv =
 
     //Scratch.InteractionExperiments.run() |> ignore
     //Scratch.FablishInterop.run argv |> ignore
-    //System.Environment.Exit 0
+    Scratch.CefTests.run argv |> ignore
+    System.Environment.Exit 0
 
     Ag.initialize()
     Aardvark.Init()

@@ -84,6 +84,7 @@
     <Compile Include="Experiments\SamplerArray.fs" />
     <Compile Include="Experiments\InteractionExperiments.fs" />
     <Compile Include="Experiments\FablishInterop.fs" />
+    <Compile Include="Experiments\CefStuff.fs" />
     <Compile Include="PGM.fs" />
     <Compile Include="ImageFormat.fs" />
     <Compile Include="Program.fs" />
