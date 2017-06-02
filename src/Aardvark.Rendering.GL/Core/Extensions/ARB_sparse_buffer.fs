@@ -39,7 +39,7 @@ module ARB_sparse_buffer =
 
         static let dNamedBufferPageCommitment = 
             if supported then 
-                let ptr = ExtensionHelpers.getAddress "glNamedBufferPageCommitment"
+                let ptr = 0n //ExtensionHelpers.getAddress "glNamedBufferPageCommitment"
                 if ptr <> 0n then
                     Marshal.GetDelegateForFunctionPointer<NamedBufferPageCommitmentDel>(ptr)
                 else
