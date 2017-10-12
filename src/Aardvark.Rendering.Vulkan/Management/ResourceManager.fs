@@ -53,8 +53,11 @@ and IResourceCache =
     inherit IResourceUser
     abstract member Remove          : key : list<obj> -> unit
 
-type INativeResourceLocation<'a when 'a : unmanaged> = IResourceLocation<nativeptr<'a>>
+type INativeResourceLocation<'a, 'v when 'v : unmanaged> = 
+    inherit IResourceLocation<'a>
+    abstract member Pointer : nativeptr<'v>
 
+type INativeResourceLocation<'v when 'v : unmanaged> = INativeResourceLocation<nativeptr<'v>, 'v>
 
 
 [<AbstractClass>]
@@ -116,7 +119,23 @@ type AbstractResourceLocation<'a>(owner : IResourceCache, key : list<obj>) =
 
     interface IResourceLocation<'a> with
         member x.Update t = x.Update t
-        
+
+[<AbstractClass>]
+type AbstractNativeResourceLocation<'v when 'v : unmanaged>(owner : IResourceCache, key : list<obj>) =
+    inherit AbstractResourceLocation<nativeptr<'v>>(owner, key)
+    abstract member Pointer : nativeptr<'v>
+
+    interface INativeResourceLocation<nativeptr<'v>, 'v> with
+        member x.Pointer = x.Pointer
+
+[<AbstractClass>]
+type AbstractNativeResourceLocation<'a, 'v when 'v : unmanaged>(owner : IResourceCache, key : list<obj>) =
+    inherit AbstractResourceLocation<'a>(owner, key)
+    abstract member Pointer : nativeptr<'v>
+
+    interface INativeResourceLocation<'a, 'v> with
+        member x.Pointer = x.Pointer
+
 [<AbstractClass; Sealed; Extension>]
 type ModResourceExtensionStuff() =
     [<Extension>]
@@ -285,8 +304,9 @@ type MutableResourceLocation<'a, 'h>(owner : IResourceCache, key : list<obj>, in
 
 [<AbstractClass>]
 type AbstractPointerResource<'a when 'a : unmanaged>(owner : IResourceCache, key : list<obj>) =
-    inherit AbstractResourceLocation<nativeptr<'a>>(owner, key)
+    inherit AbstractNativeResourceLocation<'a>(owner, key)
 
+    let mutable hasHandle = false
     let mutable ptr = NativePtr.zero
     let mutable version = 0
 
@@ -294,24 +314,27 @@ type AbstractPointerResource<'a when 'a : unmanaged>(owner : IResourceCache, key
     abstract member Free : 'a -> unit
     default x.Free _ = ()
 
+    override x.Pointer = ptr
+
     override x.Create() =
-        ()
+        ptr <- NativePtr.alloc 1
+
     override x.Destroy() =
-        if not (NativePtr.isNull ptr) then
+        if hasHandle then
             let v = NativePtr.read ptr
             x.Free v
             NativePtr.free ptr
+            hasHandle <- false
 
     override x.GetHandle(token : AdaptiveToken) =
         if x.OutOfDate then
             let value = x.Compute token
 
-            if not (NativePtr.isNull ptr) then
+            if hasHandle then
                 let v = NativePtr.read ptr
                 x.Free v
-            else
-                ptr <- NativePtr.alloc 1
 
+            hasHandle <- true
             NativePtr.write ptr value
             inc &version
             { handle = ptr; version = version }
@@ -339,6 +362,45 @@ type ResourceLocationCache<'h>(user : IResourceUser) =
         member x.RemoveLocked l = user.RemoveLocked l
         member x.Remove key = store.TryRemove key |> ignore
 
+type NativeResourceLocationCache<'h when 'h : unmanaged>(user : IResourceUser) =
+    let store = System.Collections.Concurrent.ConcurrentDictionary<list<obj>, INativeResourceLocation<'h>>()
+
+    member x.GetOrCreate(key : list<obj>, create : IResourceCache -> list<obj> -> #INativeResourceLocation<'h>) =
+        let res = 
+            store.GetOrAdd(key, fun key -> 
+                let res = create x key :> INativeResourceLocation<_>
+                res
+            )
+        res
+
+    member x.Clear() =
+        let res = store.Values |> Seq.toArray
+        for r in res do r.ReleaseAll()
+
+    interface IResourceCache with
+        member x.AddLocked l = user.AddLocked l
+        member x.RemoveLocked l = user.RemoveLocked l
+        member x.Remove key = store.TryRemove key |> ignore
+
+type NativeResourceLocationCache<'a, 'h when 'h : unmanaged>(user : IResourceUser) =
+    let store = System.Collections.Concurrent.ConcurrentDictionary<list<obj>, INativeResourceLocation<'a, 'h>>()
+
+    member x.GetOrCreate(key : list<obj>, create : IResourceCache -> list<obj> -> #INativeResourceLocation<'a, 'h>) =
+        let res = 
+            store.GetOrAdd(key, fun key -> 
+                let res = create x key :> INativeResourceLocation<_,_>
+                res
+            )
+        res
+
+    member x.Clear() =
+        let res = store.Values |> Seq.toArray
+        for r in res do r.ReleaseAll()
+
+    interface IResourceCache with
+        member x.AddLocked l = user.AddLocked l
+        member x.RemoveLocked l = user.RemoveLocked l
+        member x.Remove key = store.TryRemove key |> ignore
 
 open Aardvark.Rendering.Vulkan
 
@@ -716,7 +778,7 @@ module Resources =
                           multisample : MultisampleState,
                           depthStencil : INativeResourceLocation<VkPipelineDepthStencilStateCreateInfo>
                          ) =
-        inherit AbstractResourceLocation<nativeptr<VkPipeline>>(owner, key)
+        inherit AbstractNativeResourceLocation<VkPipeline>(owner, key)
 
         let mutable handle : Option<Pipeline> = None
         let mutable pointer : nativeptr<VkPipeline> = NativePtr.zero
@@ -724,6 +786,8 @@ module Resources =
 
         static let check str err =
             if err <> VkResult.VkSuccess then failwithf "[Vulkan] %s" str
+
+        override x.Pointer = pointer
 
         override x.Create() =
             program.Acquire()
@@ -847,11 +911,13 @@ module Resources =
                 { handle = pointer; version = version }
     
     type IndirectDrawCallResource(owner : IResourceCache, key : list<obj>, indexed : bool, calls : IResourceLocation<IndirectBuffer>) =
-        inherit AbstractResourceLocation<nativeptr<DrawCall>>(owner, key)
+        inherit AbstractNativeResourceLocation<DrawCall>(owner, key)
 
         let mutable handle : Option<DrawCall> = None
         let mutable pointer = NativePtr.zero
         let mutable version = 0
+
+        override x.Pointer = pointer
 
         override x.Create() =
             calls.Acquire()
@@ -886,11 +952,13 @@ module Resources =
                 { handle = pointer; version = version }
 
     type BufferBindingResource(owner : IResourceCache, key : list<obj>, buffers : list<IResourceLocation<Buffer> * int64>) =
-        inherit AbstractResourceLocation<nativeptr<VertexBufferBinding>>(owner, key)
+        inherit AbstractNativeResourceLocation<VertexBufferBinding>(owner, key)
 
         let mutable handle : Option<VertexBufferBinding> = None
         let mutable pointer = NativePtr.zero
         let mutable version = 0
+
+        override x.Pointer = pointer
 
         override x.Create() =
             for (b,_) in buffers do b.Acquire()
@@ -925,13 +993,15 @@ module Resources =
                 { handle = pointer; version = version }
 
     type DescriptorSetBindingResource(owner : IResourceCache, key : list<obj>, layout : PipelineLayout, sets : list<IResourceLocation<DescriptorSet>>) =
-        inherit AbstractResourceLocation<nativeptr<DescriptorSetBinding>>(owner, key)
+        inherit AbstractNativeResourceLocation<DescriptorSetBinding>(owner, key)
 
         let sets = List.toArray sets
 
         let mutable handle : nativeptr<DescriptorSetBinding> = NativePtr.zero
         let mutable setVersions = Array.init sets.Length (fun _ -> -1)
         let mutable version = 0
+
+        override x.Pointer = handle
 
         override x.Create() =
             for s in sets do s.Acquire()
@@ -965,11 +1035,13 @@ module Resources =
                 { handle = handle; version = version }
  
     type IndexBufferBindingResource(owner : IResourceCache, key : list<obj>, indexType : VkIndexType, index : IResourceLocation<Buffer>) =
-        inherit AbstractResourceLocation<nativeptr<IndexBufferBinding>>(owner, key)
+        inherit AbstractNativeResourceLocation<IndexBufferBinding>(owner, key)
 
         let mutable handle : Option<IndexBufferBinding> = None
         let mutable pointer = NativePtr.zero
         let mutable version = 0
+
+        override x.Pointer = pointer
 
         override x.Create() =
             index.Acquire()
@@ -1053,18 +1125,18 @@ type ResourceManager(user : IResourceUser, device : Device) =
     let simpleSurfaceCache      = System.Collections.Concurrent.ConcurrentDictionary<obj, ShaderProgram>()
     let fshadeThingCache        = System.Collections.Concurrent.ConcurrentDictionary<obj, PipelineLayout * IMod<FShade.Imperative.Module>>()
     
-    let vertexInputCache        = ResourceLocationCache<nativeptr<VkPipelineVertexInputStateCreateInfo>>(user)
-    let inputAssemblyCache      = ResourceLocationCache<nativeptr<VkPipelineInputAssemblyStateCreateInfo>>(user)
-    let depthStencilCache       = ResourceLocationCache<nativeptr<VkPipelineDepthStencilStateCreateInfo>>(user)
-    let rasterizerStateCache    = ResourceLocationCache<nativeptr<VkPipelineRasterizationStateCreateInfo>>(user)
-    let colorBlendStateCache    = ResourceLocationCache<nativeptr<VkPipelineColorBlendStateCreateInfo>>(user)
-    let pipelineCache           = ResourceLocationCache<nativeptr<VkPipeline>>(user)
+    let vertexInputCache        = NativeResourceLocationCache<VkPipelineVertexInputStateCreateInfo>(user)
+    let inputAssemblyCache      = NativeResourceLocationCache<VkPipelineInputAssemblyStateCreateInfo>(user)
+    let depthStencilCache       = NativeResourceLocationCache<VkPipelineDepthStencilStateCreateInfo>(user)
+    let rasterizerStateCache    = NativeResourceLocationCache<VkPipelineRasterizationStateCreateInfo>(user)
+    let colorBlendStateCache    = NativeResourceLocationCache<VkPipelineColorBlendStateCreateInfo>(user)
+    let pipelineCache           = NativeResourceLocationCache<VkPipeline>(user)
 
-    let drawCallCache           = ResourceLocationCache<nativeptr<DrawCall>>(user)
-    let bufferBindingCache      = ResourceLocationCache<nativeptr<VertexBufferBinding>>(user)
-    let descriptorBindingCache  = ResourceLocationCache<nativeptr<DescriptorSetBinding>>(user)
-    let indexBindingCache       = ResourceLocationCache<nativeptr<IndexBufferBinding>>(user)
-    let isActiveCache           = ResourceLocationCache<nativeptr<int>>(user)
+    let drawCallCache           = NativeResourceLocationCache<DrawCall>(user)
+    let bufferBindingCache      = NativeResourceLocationCache<VertexBufferBinding>(user)
+    let descriptorBindingCache  = NativeResourceLocationCache<DescriptorSetBinding>(user)
+    let indexBindingCache       = NativeResourceLocationCache<IndexBufferBinding>(user)
+    let isActiveCache           = NativeResourceLocationCache<int>(user)
 
 
     member x.ResourceUser = user

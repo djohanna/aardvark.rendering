@@ -26,7 +26,7 @@ module RenderTaskNew =
             r.Update(t).handle
 
         let stats : nativeptr<V2i> = NativePtr.alloc 1
-        let cache = ResourceLocationCache<VKVM.CommandStream>(manager.ResourceUser)
+        let cache = NativeResourceLocationCache<VKVM.CommandStream, VKVM.CommandFragment>(manager.ResourceUser)
         let mutable version = 0
 
         override x.InputChanged(t ,i) =
@@ -40,7 +40,7 @@ module RenderTaskNew =
             cache.Clear()
 
 
-        member x.Compile(o : IRenderObject) : IResourceLocation<VKVM.CommandStream> =
+        member x.Compile(o : IRenderObject) : INativeResourceLocation<_,_> =
             let call = 
                 cache.GetOrCreate([o :> obj], fun owner key ->
                     let mutable stream = Unchecked.defaultof<VKVM.CommandStream> //new VKVM.CommandStream()
@@ -66,7 +66,9 @@ module RenderTaskNew =
                             o
                         )
 
-                    { new AbstractResourceLocation<VKVM.CommandStream>(owner, key) with
+                    { new AbstractNativeResourceLocation<VKVM.CommandStream, VKVM.CommandFragment>(owner, key) with
+
+                        member x.Pointer = stream.Handle
 
                         member x.Create() =
                             stream <- new VKVM.CommandStream()
@@ -100,7 +102,7 @@ module RenderTaskNew =
 
     type IToken = interface end
 
-    type private OrderToken(s : VKVM.CommandStream, r : Option<IResourceLocation<VKVM.CommandStream>>) =
+    type private OrderToken(s : VKVM.CommandStream, r : Option<INativeResourceLocation<VKVM.CommandStream, VKVM.CommandFragment>>) =
         member x.Stream = s
         member x.Resource = r
         interface IToken
@@ -122,21 +124,19 @@ module RenderTaskNew =
         let firstToken = OrderToken(first, None) :> IToken
 
         let cmdBuffer = pool.CreateCommandBuffer(CommandBufferLevel.Secondary)
-        let dirty = HashSet<IResourceLocation<VKVM.CommandStream>>()
+        let dirty = HashSet<IResourceLocation>()
 
         override x.InputChanged(t : obj, o : IAdaptiveObject) =
             match o with
-                | :? IResourceLocation<VKVM.CommandStream> as r ->
+                | :? IResourceLocation as r ->
                     lock dirty (fun () -> dirty.Add r |> ignore)
                 | _ ->
                     ()
 
         member private x.Compile(o : IRenderObject) =
             let res = compiler.Compile(o)
-            x.EvaluateAlways AdaptiveToken.Top (fun t ->
-                let stream = res.Update(t).handle
-                stream, res
-            )
+            let stream = x.EvaluateAlways AdaptiveToken.Top (fun t -> res.Update(t).handle)
+            stream, res
 
         member x.Dispose() =
             compiler.Dispose()
@@ -353,7 +353,88 @@ module RenderTaskNew =
             cmd.End()
 
             device.GraphicsFamily.RunSynchronously cmd
-            
+     
+     
+    type AdaptiveRenderTask(device : Device, objects : aset<IRenderObject>, renderPass : RenderPass, shareTextures : bool, shareBuffers : bool) =
+        let locks = ReferenceCountingSet<ILockedResource>()
+
+        let user =
+            { new IResourceUser with
+                member x.AddLocked l = lock locks (fun () -> locks.Add l |> ignore)
+                member x.RemoveLocked l = lock locks (fun () -> locks.Remove l |> ignore)
+            }
+
+        let manager = new ResourceManager(user, device)
+        let compiler = RenderObjectCompiler(manager, renderPass)
+
+        let reader =
+            let inputReader = objects.GetReader()
+
+            let cache = Dict<IRenderObject, list<obj> * INativeResourceLocation<VKVM.CommandStream, VKVM.CommandFragment>>()
+
+            { new AbstractReader<hdeltaset<list<obj> * INativeResourceLocation<VKVM.CommandStream, VKVM.CommandFragment>>>(Ag.emptyScope, HDeltaSet.monoid) with
+                override x.Release() =
+                    for (_,r) in cache.Values do
+                        r.Release()
+                    cache.Clear()
+
+                override x.Compute t = 
+                    let deltas = inputReader.GetOperations t
+                    deltas |> HDeltaSet.map (fun d ->
+                        match d with
+                            | Add(_,o) -> 
+                                let thing =
+                                    cache.GetOrCreate(o, fun o ->
+                                        let prep = manager.PrepareRenderObject(t, renderPass, o)
+                                        let l = compiler.Compile(o)
+                                        [prep.First.pipeline :> obj], l
+                                    )
+                                Add thing
+                            | Rem(_,o) ->
+                                match cache.TryRemove o with
+                                    | (true, ((_,po) as t)) -> 
+                                        po.Release()
+                                        Rem t
+                                    | _ -> 
+                                        failwith ""
+                    
+                    )
+            }
+
+        let update (t : AdaptiveToken) =
+            for d in reader.GetOperations(t) do
+                match d with
+                    | Add(_,(key, code)) ->
+                        ()
+                    | Rem(_,(key, code)) ->
+                        ()
+
+
+    type LinkedThing(stream : VKVM.CommandStream) =
+        
+        let mutable prev : Option<LinkedThing> = None
+        let mutable next : Option<LinkedThing> = None
+
+        member x.Run(cmd) = stream.Run(cmd)
+
+        member x.Stream = stream
+
+        member x.Prev
+            with get() = prev
+            and set p = prev <- p
+
+        member x.Next
+            with get() = next
+            and set (n : Option<LinkedThing>) =
+                match n with
+                    | Some n -> stream.Next <- Some n.Stream
+                    | None -> stream.Next <- None
+                next <- n
+
+
+
+
+
 
 
 

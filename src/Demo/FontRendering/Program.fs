@@ -383,7 +383,7 @@ let tensorPerformance() =
 
 [<EntryPoint; STAThread>]
 let main argv = 
-    
+
     Ag.initialize()
     Aardvark.Init()
 
@@ -392,11 +392,13 @@ let main argv =
     //Environment.Exit 0
 
 
-    use app = new VulkanApplication(true)
+    use app = new OpenGlApplication(true)
     let win = app.CreateSimpleRenderWindow(8)
     
 
-    let cam = CameraViewWithSky(Location = V3d.III * 2.0, Forward = -V3d.III.Normalized)
+    let center = V3d(1.0E12, 0.0, 0.0)
+
+    let cam = CameraViewWithSky(Location = center + V3d.III * 2.0, Forward = -V3d.III.Normalized)
     let proj = CameraProjectionPerspective(60.0, 0.1, 1000.0, float 1024 / float 768)
 
     let geometry = 
@@ -422,7 +424,7 @@ let main argv =
 
     let trafos = trafos |> Mod.constant
 
-    let cam = CameraView.lookAt (V3d.III * 6.0) V3d.Zero V3d.OOI
+    let cam = CameraView.lookAt (center + V3d.III * 6.0) center V3d.OOI
 
     let mode = Mod.init Fly
     let controllerActive = Mod.init true
@@ -566,7 +568,7 @@ let main argv =
             // textures can also be bound (using file-texture here)
             do! Air.BindTexture(
                     DefaultSemantic.DiffuseColorTexture, 
-                    @"E:\Development\WorkDirectory\DataSVN\pattern.jpg"
+                    @"C:\Users\Schorsch\Development\WorkDirectory\pattern.jpg"
                 )
 
             do! Air.BindVertexBuffers [
@@ -647,14 +649,19 @@ let main argv =
         active |> Mod.map (fun a ->
             if a then
                 Sg.group [label3; label2; label1]
-                    //|> Sg.andAlso quad
+                    |> Sg.andAlso quad
                     |> Sg.viewTrafo (cam |> Mod.map CameraView.viewTrafo)
                     |> Sg.projTrafo (win.Sizes |> Mod.map (fun s -> Frustum.perspective 60.0 0.1 100.0 (float s.X / float s.Y) |> Frustum.projTrafo))
                     |> Sg.fillMode mode
                     |> Sg.uniform "Antialias" aa
             else
                 Sg.ofList []
-        ) |> Sg.dynamic
+        ) 
+        |> Sg.dynamic
+        |> Sg.translate center.X center.Y center.Z
+
+
+
 
     win.Keyboard.KeyDown(Keys.Enter).Values.Add (fun _ ->
         transact (fun () ->

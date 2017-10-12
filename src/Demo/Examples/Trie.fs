@@ -21,20 +21,21 @@ type TrieNode<'a when 'a :> ILinked<'a>>(parent : Trie<'a>, key : obj) =
     member x.Key = key
 
     member x.First =
-        match firstChild with
+        match value with
+            | Some v -> Some v
+            | None -> 
+                match firstChild with
+                    | null -> failwith "encountered empty Trie"
+                    | v -> v.First
+
+    member x.Last =
+        match lastChild with
             | null -> 
                 match value with
                     | Some v -> Some v
                     | None -> failwith "encountered empty Trie"
-            | v -> v.First
-
-    member x.Last =
-        match value with
-            | Some v -> Some v
-            | None -> 
-                match lastChild with
-                    | null -> failwith "encountered empty Trie"
-                    | n -> n.Last
+            | n -> 
+                n.Last
 
     member x.Prev
         with get() = prev
@@ -52,6 +53,7 @@ type TrieNode<'a when 'a :> ILinked<'a>>(parent : Trie<'a>, key : obj) =
     member x.Add(key : list<obj>, l : TrieRef<'a>, r : TrieRef<'a>, newValue : 'a) =
         match key with
             | [] -> 
+                
                 match value with
                     | Some o ->
                         let p = o.Prev
@@ -255,6 +257,7 @@ and [<StructuredFormatDisplay("{AsString}")>] Trie<'a when 'a :> ILinked<'a>>() 
             | null -> "{}"
             | r -> r.ToString()
 
+
 module Test = 
 
     [<StructuredFormatDisplay("{AsString}")>]
@@ -295,7 +298,10 @@ module Test =
 
         printfn "%A" bla
         printfn "%A" (Seq.toList bla.Values)
-
+        
+        bla.Add([1;2;2], Linked 5)
+        printfn "%A" bla
+        printfn "%A" (Seq.toList bla.Values)
     
         bla.Remove([0;1;4]) |> ignore
         printfn "%A" bla
