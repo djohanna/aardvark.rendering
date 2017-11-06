@@ -42,9 +42,9 @@ module Loader =
                             PixTexture2d(mip, false) :> ITexture |> Mod.constant :> IMod |> Some
 
                         match string sem with
-                            | "DiffuseColorTexture" -> singleValueTexture x.diffuse
+                            //| "DiffuseColorTexture" -> singleValueTexture x.diffuse
                             | "SpecularColorTexture" -> singleValueTexture x.specular
-                            | "NormalMapTexture" -> singleValueTexture (C4f(0.5f, 0.5f, 1.0f, 1.0f))
+                            //| "NormalMapTexture" -> singleValueTexture (C4f(0.5f, 0.5f, 1.0f, 1.0f))
                             | _ -> None
 
             member x.Dispose() = ()
@@ -326,7 +326,7 @@ module Loader =
                     )
 
                 let mutable textures = 
-                    slots |> List.map (fun (name, slot) ->
+                    slots |> List.choose (fun (name, slot) ->
                             let sem = toSemantic slot.TextureType
 
                             match Map.tryFind name table with
@@ -336,10 +336,11 @@ module Loader =
                                             | Some file -> file
                                             | None -> map.[Symbol.Empty]
 
-                                    sem, { texture = FileTexture(file, { wantCompressed = false; wantMipMaps = true; wantSrgb = false }) :> ITexture; coordIndex = slot.UVIndex }
+                                    let r = sem, { texture = FileTexture(file, { wantCompressed = false; wantMipMaps = true; wantSrgb = false }) :> ITexture; coordIndex = slot.UVIndex }
+                                    Some r
 
                                 | None ->
-                                    sem, { texture = NullTexture() :> ITexture; coordIndex = slot.UVIndex }
+                                    None //sem, { texture = NullTexture() :> ITexture; coordIndex = slot.UVIndex }
                          )
                       |> Map.ofList
 
@@ -365,7 +366,7 @@ module Loader =
                         | Some map ->
                             for (k,v) in Map.toSeq map do
                                 if not (Map.containsKey k textures) then
-                                    textures <- Map.add k { texture = FileTexture(v, true) :> ITexture; coordIndex = 0 } textures
+                                    textures <- Map.add k { texture = FileTexture(v, { wantCompressed = false; wantMipMaps = true; wantSrgb = false }) :> ITexture; coordIndex = 0 } textures
                         | None ->
                             ()
 
@@ -399,6 +400,10 @@ module Loader =
 
 
                     let semantics = mat.textures |> Map.toSeq |> Seq.map (fun (k,v) -> v.coordIndex, k) |> Map.ofSeq
+
+                    if m.TextureCoordinateChannelCount > 0 then
+                        attributes.[DefaultSemantic.DiffuseColorCoordinates] <- m.TextureCoordinateChannels.[0].MapToArray(fun v -> V2f(v.X,v.Y))
+
                     for c in 0..m.TextureCoordinateChannelCount-1 do
                         let att = m.TextureCoordinateChannels.[c]
                         match Map.tryFind c semantics with
@@ -413,6 +418,7 @@ module Loader =
                                 attributes.[coordSem] <- att.MapToArray(fun v -> V2f(v.X, v.Y))
 
                             | None ->
+                                printfn "none"
                                 ()
 
                     let mode =

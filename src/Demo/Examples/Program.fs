@@ -1282,6 +1282,8 @@ open Aardvark.Application.WinForms
 [<STAThread>]
 let main args =
     //Management.run()
+    Examples.ModelLoading.run ()
+    System.Environment.Exit 0
 
     let useVulkan = true
 
@@ -1298,7 +1300,8 @@ let main args =
             let app = new Aardvark.Application.WinForms.OpenGlApplication()
             let win = app.CreateGameWindow()
             app:> Aardvark.Application.IApplication,win :> Aardvark.Application.IRenderWindow
-    CullingTest.run app win |> ignore
+    
+    //CullingTest.run app win |> ignore
     //CullingTest.runInstanced () |> ignore
     //CullingTest.runStructural app win|> ignore
     System.Environment.Exit 0
