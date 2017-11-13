@@ -385,6 +385,15 @@ type MultiRenderObject(children : list<IRenderObject>) =
             | :? MultiRenderObject as o -> children.Equals(o.Children)
             | _ -> false
 
+
+
+[<RequireQualifiedAccess>]
+type RuntimeCommand =
+    | Unordered of objects : aset<IRenderObject>
+    | Clear of colors : Map<Symbol, IMod<C4f>> * depth : Option<IMod<float>> * stencil : Option<IMod<uint32>>
+
+
+
 type IAdaptiveBufferReader =
     inherit IAdaptiveObject
     inherit IDisposable

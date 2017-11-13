@@ -448,6 +448,103 @@ module RenderTask =
             override x.GetHandle _ = 
                 { handle = stream; version = 0 }   
 
+        type ClearCommandStreamResource(owner, key, pass : RenderPass, viewports : IMod<Box2i[]>, colors : Map<Symbol, IMod<C4f>>, depth : Option<IMod<float>>, stencil : Option<IMod<uint32>>) =
+            inherit AbstractResourceLocation<VKVM.CommandStream>(owner, key)
+         
+            let mutable stream : VKVM.CommandStream = Unchecked.defaultof<_>
+
+            let compile (token : AdaptiveToken) =
+                stream.Clear()
+
+                let hasDepth =
+                    Option.isSome pass.DepthStencilAttachment
+
+                let depthClear =
+                    match depth, stencil with
+                        | Some d, Some s ->
+                            let d = d.GetValue token
+                            let s = s.GetValue token
+
+                            VkClearAttachment(
+                                VkImageAspectFlags.DepthBit ||| VkImageAspectFlags.StencilBit, 
+                                0u,
+                                VkClearValue(depthStencil = VkClearDepthStencilValue(float32 d, s))
+                            ) |> Some
+
+                        | Some d, None ->   
+                            let d = d.GetValue token
+
+                            VkClearAttachment(
+                                VkImageAspectFlags.DepthBit, 
+                                0u,
+                                VkClearValue(depthStencil = VkClearDepthStencilValue(float32 d, 0u))
+                            ) |> Some
+                             
+                        | None, Some s ->
+                            let s = s.GetValue token
+
+                            VkClearAttachment(
+                                VkImageAspectFlags.StencilBit, 
+                                0u,
+                                VkClearValue(depthStencil = VkClearDepthStencilValue(1.0f, s))
+                            ) |> Some
+
+                        | None, None ->
+                            None
+
+                let colors = 
+                    pass.ColorAttachments |> Map.toSeq |> Seq.choose (fun (i,(n,_)) ->
+                        match Map.tryFind n colors with
+                            | Some value -> 
+                                let res = 
+                                    VkClearAttachment(
+                                        VkImageAspectFlags.ColorBit, 
+                                        uint32 (if hasDepth then 1 + i else i),
+                                        VkClearValue(color = VkClearColorValue(float32 = value.GetValue(token).ToV4f()))
+                                    )
+                                Some res
+                            | None ->
+                                None
+                    ) |> Seq.toArray
+
+                let clears =
+                    match depthClear with
+                        | Some c -> Array.append [|c|] colors
+                        | None -> colors
+
+                let rect =
+                    let s = viewports.GetValue(token).[0]
+                    VkClearRect(
+                        VkRect2D(VkOffset2D(s.Min.X,s.Min.Y), VkExtent2D(uint32 (1 + s.Max.X - s.Min.X) , uint32 (1 + s.Max.Y - s.Min.Y))),
+                        0u,
+                        uint32 pass.LayerCount
+                    )
+
+                stream.ClearAttachments(
+                    clears,
+                    [| rect |]
+                ) |> ignore
+
+            let id = newId()
+
+            interface ICommandStreamResource with
+                member x.Stream = stream
+                member x.Resources = Seq.empty
+                member x.GroupKey = [id :> obj]
+                member x.BoundingBox = Mod.constant Box3d.Invalid
+
+            override x.Create() =
+                stream <- new VKVM.CommandStream()
+                
+            override x.Destroy() = 
+                stream.Dispose()
+                stream <- Unchecked.defaultof<_>
+            override x.GetHandle t = 
+                compile t
+                { handle = stream; version = 0 }   
+                
+           
+
     module Compiler = 
         open CommandStreams
 
@@ -456,6 +553,7 @@ module RenderTask =
 
             let stats : nativeptr<V2i> = NativePtr.alloc 1
             let cache = ResourceLocationCache<VKVM.CommandStream>(manager.ResourceUser)
+            let clearCache = ResourceLocationCache<VKVM.CommandStream>(manager.ResourceUser)
             let mutable version = 0
 
 
@@ -481,6 +579,15 @@ module RenderTask =
                 call.Acquire()
                 call |> unbox<ICommandStreamResource>
             
+            member x.CompileClear(pass : RenderPass, viewports : IMod<Box2i[]>, colors : Map<Symbol, IMod<C4f>>, depth : Option<IMod<float>>, stencil : Option<IMod<uint32>>) =
+                
+                let call = 
+                    clearCache.GetOrCreate([pass :> obj; viewports :> obj; colors :> obj; depth :> obj; stencil :> obj], fun owner key ->
+                        new ClearCommandStreamResource(owner, key, pass, viewports, colors, depth, stencil) :> ICommandStreamResource
+                    )
+                call.Acquire()
+                call |> unbox<ICommandStreamResource>
+
             member x.CurrentVersion = version
 
     module ChangeableCommandBuffers = 
@@ -521,6 +628,15 @@ module RenderTask =
 
             member x.Compile(o : IRenderObject) =
                 let res = compiler.Compile(o)
+                lock x (fun () ->
+                    let o = x.OutOfDate
+                    try x.EvaluateAlways AdaptiveToken.Top (fun t -> res.Update(t) |> ignore; res)
+                    finally x.OutOfDate <- o
+                )
+
+        
+            member x.Compile(o : RenderObjectCompiler -> ICommandStreamResource) =
+                let res = o compiler
                 lock x (fun () ->
                     let o = x.OutOfDate
                     try x.EvaluateAlways AdaptiveToken.Top (fun t -> res.Update(t) |> ignore; res)
@@ -593,6 +709,7 @@ module RenderTask =
 
                 cmdBuffer
             
+
         [<AbstractClass>]
         type AbstractChangeableSetCommandBuffer(manager : ResourceManager, pool : CommandPool, renderPass : RenderPass, viewports : IMod<Box2i[]>) =
             inherit AbstractChangeableCommandBuffer(manager, pool, renderPass, viewports)
@@ -698,6 +815,82 @@ module RenderTask =
 
 
                 true
+
+
+        type ChangeableCommandCommandBuffer(manager : ResourceManager, pool : CommandPool, renderPass : RenderPass, viewports : IMod<Box2i[]>) =
+            inherit AbstractChangeableCommandBuffer(manager, pool, renderPass, viewports)
+
+            let first = new VKVM.CommandStream()
+            let entries = SortedDictionaryExt<Index, ICommandStreamResource>(compare)
+
+            member private x.Remove(f : ICommandStreamResource) =
+                match f.Stream.Prev with
+                    | None -> first.Next <- None
+                    | Some p -> p.Next <- f.Stream.Next
+
+                x.Destroy f
+
+            override x.Prolog = first
+
+            override x.Release() =
+                ()
+
+            member x.Set(i : Index, cmd : Aardvark.Base.RuntimeCommand) =
+                let command = 
+                    match cmd with
+                        | RuntimeCommand.Clear(color, depth, stencil) ->
+                            x.Compile(fun c ->
+                                c.CompileClear(renderPass, viewports, color, depth, stencil)
+                            )
+                        | RuntimeCommand.Unordered objects ->
+                            let reader = objects.GetReader()
+                            let cmdBuffer =
+                                { new ChangeableUnorderedCommandBuffer(manager, pool, renderPass, viewports) with
+                                    override x.Sort token =
+                                        let deltas = reader.GetOperations token
+
+                                        for d in deltas do
+                                            match d with
+                                                | Add(_,o) -> x.Add(o) |> ignore
+                                                | Rem(_,o) -> x.Remove(o) |> ignore
+
+                                        not (HDeltaSet.isEmpty deltas)
+
+                                    override x.Release() =
+                                        reader.Dispose()
+                                        base.Release()
+                                }
+
+                            { new AbstractResourceLocation<VKVM.CommandStream>()  with
+                                
+                            }
+
+                            failwith ""
+
+                entries |> SortedDictionary.setWithNeighbours i (fun l s r ->
+                    match s with
+                        | Some s -> x.Remove s
+                        | None -> ()
+
+                    match l with
+                        | Some(_,l) -> l.Stream.Next <- Some command.Stream
+                        | None -> first.Next <- Some command.Stream
+
+                    match r with
+                        | Some(_,r) -> command.Stream.Next <- Some r.Stream
+                        | None -> command.Stream.Next <- None
+
+                    command
+                ) |> ignore
+
+            member x.Remove(i : Index) =
+                match entries.TryGetValue i with
+                    | (true, cmd) ->
+                        entries.Remove i |> ignore
+                        x.Destroy cmd
+                    | _ ->
+                        ()
+
 
     open ChangeableCommandBuffers
 
