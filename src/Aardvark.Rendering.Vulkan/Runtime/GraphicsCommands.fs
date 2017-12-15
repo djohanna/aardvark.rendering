@@ -25,24 +25,49 @@ module ``Graphics Commands`` =
                 Disposable.Empty
         }
 
+    open KHXDeviceGroup
     type Command with
         static member BeginPass(renderPass : RenderPass, framebuffer : Framebuffer, bounds : Box2i, inlineContent : bool) =
             { new Command() with
                 member x.Compatible = QueueFlags.Graphics
                 member x.Enqueue cmd =
-                    let mutable info =
-                        VkRenderPassBeginInfo(
-                            VkStructureType.RenderPassBeginInfo, 0n,
-                            renderPass.Handle,
-                            framebuffer.Handle,
-                            VkRect2D(VkOffset2D(bounds.Min.X, bounds.Min.Y), VkExtent2D(1 + bounds.SizeX, 1 + bounds.SizeY)),
-                            0u,
-                            NativePtr.zero
-                        )
+                    //let mutable rect = VkRect2D(VkOffset2D(bounds.Min.X, bounds.Min.Y), VkExtent2D(1 + bounds.SizeX, 1 + bounds.SizeY))
+                    if renderPass.Device.PhysicalDevices.Length > 1 then
+                        let mutable innerInfo =
+                            VkDeviceGroupRenderPassBeginInfoKHX(
+                                VkStructureType.DeviceGroupRenderPassBeginInfoKhx, 0n,
+                                3u,
+                                0u, NativePtr.zero //&&rect
+                            )
+
+                        let mutable info =
+                            VkRenderPassBeginInfo(
+                                VkStructureType.RenderPassBeginInfo, NativePtr.toNativeInt &&innerInfo,
+                                renderPass.Handle,
+                                framebuffer.Handle,
+                                VkRect2D(VkOffset2D(bounds.Min.X, bounds.Min.Y), VkExtent2D(1 + bounds.SizeX, 1 + bounds.SizeY)),
+                                0u,
+                                NativePtr.zero
+                            )
             
-                    cmd.AppendCommand()
-                    VkRaw.vkCmdBeginRenderPass(cmd.Handle, &&info, if inlineContent then VkSubpassContents.Inline else VkSubpassContents.SecondaryCommandBuffers)
-                    Disposable.Empty
+                        cmd.AppendCommand()
+                        VkRaw.vkCmdBeginRenderPass(cmd.Handle, &&info, if inlineContent then VkSubpassContents.Inline else VkSubpassContents.SecondaryCommandBuffers)
+                        Disposable.Empty
+                    else
+                        
+                        let mutable info =
+                            VkRenderPassBeginInfo(
+                                VkStructureType.RenderPassBeginInfo, 0n,
+                                renderPass.Handle,
+                                framebuffer.Handle,
+                                VkRect2D(VkOffset2D(bounds.Min.X, bounds.Min.Y), VkExtent2D(1 + bounds.SizeX, 1 + bounds.SizeY)),
+                                0u,
+                                NativePtr.zero
+                            )
+            
+                        cmd.AppendCommand()
+                        VkRaw.vkCmdBeginRenderPass(cmd.Handle, &&info, if inlineContent then VkSubpassContents.Inline else VkSubpassContents.SecondaryCommandBuffers)
+                        Disposable.Empty
             }
 
         static member BeginPass(renderPass : RenderPass, framebuffer : Framebuffer, inlineContent : bool) =

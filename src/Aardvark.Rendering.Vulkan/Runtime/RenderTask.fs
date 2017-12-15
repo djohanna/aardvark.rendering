@@ -1817,6 +1817,7 @@ module RenderTask =
                     else
                         do! Command.TransformLayout(img, VkImageLayout.ColorAttachmentOptimal)
 
+
                 do! Command.BeginPass(renderPass, fbo, false)
                 do! Command.Execute passCmds
                 do! Command.EndPass

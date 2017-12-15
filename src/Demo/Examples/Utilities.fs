@@ -3,6 +3,7 @@
 open System
 open Aardvark.Base
 open Aardvark.Base.Incremental
+open Microsoft.FSharp.NativeInterop
 
 open Aardvark.SceneGraph
 open Aardvark.Application
@@ -13,6 +14,8 @@ open Aardvark.Base.ShaderReflection
 open Aardvark.Rendering.Vulkan
 open Aardvark.Rendering.Text
 open Aardvark.Application.OpenVR
+open Aardvark.Rendering.Vulkan.KHXDeviceGroup
+open KHRBindMemory2
 
 [<RequireQualifiedAccess>]
 type Backend =
@@ -285,17 +288,127 @@ module Utilities =
 
         } :> ISimpleRenderWindow
 
+    type VkImageCreateFlags with
+        static member VK_IMAGE_CREATE_BIND_SFR_BIT_KHX = unbox<VkImageCreateFlags> 64
+
+    let createMultiDeviceTexture (size : V2i) (format : TextureFormat) (device : Device) =
+        
+        let mutable imageInfo =
+            VkImageCreateInfo(
+                VkStructureType.ImageCreateInfo, 0n,
+                VkImageCreateFlags.VK_IMAGE_CREATE_BIND_SFR_BIT_KHX,
+                VkImageType.D2d,
+                VkFormat.ofTextureFormat format,
+                VkExtent3D(size.X, size.Y, 1),
+                1u, 1u, VkSampleCountFlags.D1Bit,
+                VkImageTiling.Optimal,
+                VkImageUsageFlags.TransferSrcBit ||| VkImageUsageFlags.TransferDstBit ||| VkImageUsageFlags.SampledBit ,
+                VkSharingMode.Exclusive,
+                0u, NativePtr.zero,
+                VkImageLayout.Undefined
+            )
+
+
+
+
+        let mutable img = VkImage.Null
+        VkRaw.vkCreateImage(device.Handle, &&imageInfo, NativePtr.zero, &&img)
+            |> ignore
+
+        let mutable reqs = VkMemoryRequirements()
+        VkRaw.vkGetImageMemoryRequirements(device.Handle, img, &&reqs)
+
+
+//
+//        let mutable allocInfo =
+//            VkMemoryAllocateFlagsInfoKHX(
+//                VkStructureType.MemoryAllocateFlagsInfoKhx, 0n,
+//                uint32 (int VkMemoryAllocateFlagBitsKHX.VkMemoryAllocateDeviceMaskBitKhx),
+//                3u
+//            )
+//
+//        let mutable info = 
+//            VkMemoryAllocateInfo(
+//                VkStructureType.MemoryAllocateInfo, NativePtr.toNativeInt &&allocInfo,
+//                reqs.size,
+//                uint32 device.DeviceMemory.Index
+//            )
+//
+//        let mutable memhandle = VkDeviceMemory.Null
+//        VkRaw.vkAllocateMemory(device.Handle, &&info, NativePtr.zero, &&memhandle) |> ignore
+//
+//        let mem = DeviceMemory(device.DeviceMemory, memhandle, int64 reqs.size, 0n)
+
+
+        let mem = device.DeviceMemory.AllocRaw(reqs.size)
+
+
+
+        let deviceIndices = [| 0u; 1u |]
+        let rects = 
+            let halfSize = size / V2i(2,1)
+            let rect (off : V2i) (size : V2i) = VkRect2D(VkOffset2D(off.X, off.Y), VkExtent2D(uint32 size.X, uint32 size.Y))
+            [|
+                // device0 sees memory0 at
+                rect V2i.Zero halfSize
+                // device1 sees memory0 at
+                rect V2i.Zero halfSize; 
+                
+                // device0 sees memory1 at
+                rect (V2i(halfSize.X, 0)) halfSize;
+                
+                
+                // device1 sees memory1 at
+                rect (V2i(halfSize.X, 0)) halfSize;
+            |]
+
+        rects |> NativePtr.withA (fun pRects ->
+            deviceIndices |> NativePtr.withA (fun pDeviceIndices ->
+                let mutable bindBla =
+                    VkBindImageMemoryDeviceGroupInfoKHX(
+                        VkStructureType.BindImageMemoryDeviceGroupInfoKhx, 0n,
+                        2u,
+                        pDeviceIndices,
+                        4u,
+                        pRects
+                    )
+
+                let mutable bindInfo =
+                    VkBindImageMemoryInfoKHR(
+                        VkStructureType.BindImageMemoryInfoKhr, NativePtr.toNativeInt &&bindBla,
+                        img, 
+                        mem.Handle,
+                        0UL
+                    )
+
+                VkRaw.vkBindImageMemory2KHR(device.Handle, 1u, &&bindInfo) |> printfn "BIND: %A"
+            )
+        )
+
+
+        let dImg = new Aardvark.Rendering.Vulkan.Image(device, img, V3i(size, 1), 1, 1, 1, TextureDimension.Texture2D, VkFormat.ofTextureFormat format, mem, VkImageLayout.Undefined)
+
+        device.perform {
+            do! Command.TransformLayout(dImg, VkImageLayout.TransferDstOptimal)
+        }
+        dImg
+
+
+
+
+
+
     let private createStereoScreen (cfg : RenderConfig) =
         let app =
             match cfg.backend with
                 | Backend.GL -> new OpenGlApplication(cfg.debug) :> IApplication
-                | Backend.Vulkan -> new VulkanApplication(cfg.debug) :> IApplication
+                | Backend.Vulkan -> new VulkanApplication(cfg.debug,true) :> IApplication
                 | Backend.Both -> failwith "not implemented"
 
         let win = app.CreateSimpleRenderWindow(1)
         let runtime = app.Runtime
 
-        let samples = cfg.samples
+        let samples = 1 //cfg.samples
         let signature =
             runtime.CreateFramebufferSignature(
                 SymDict.ofList [
@@ -319,7 +432,53 @@ module Utilities =
                 ]
             )  
 
-        let s = win.Sizes |> Mod.map (fun s -> s / V2i(2,1))
+        let s = Mod.constant (V2i(1024, 1024)) //win.Sizes |> Mod.map (fun s -> s / V2i(2,1))
+
+//        let device : Device = failwith ""
+//        let img : VkImage = failwith ""
+//        let mem : VkDeviceMemory = failwith ""
+//        let offset = 0UL
+//
+//        let r = VkRect2D()
+//
+//
+//        let mutable allocInfo =
+//            VkMemoryAllocateFlagsInfoKHX(
+//                VkStructureType.MemoryAllocateFlagsInfoKhx, 0n,
+//                unbox VkMemoryAllocateFlagBitsKHX.VkMemoryAllocateDeviceMaskBitKhx,
+//                3u
+//            )
+//
+//        let mutable info = 
+//            VkMemoryAllocateInfo(
+//                VkStructureType.MemoryAllocateInfo, NativePtr.toNativeInt &&allocInfo,
+//                1UL,
+//                0u
+//            )
+//
+//        let groupInfo =
+//            VkBindImageMemoryDeviceGroupInfoKHX(
+//                VkStructureType.BindImageMemoryDeviceGroupInfoKhx, 0n,
+//                2u, NativePtr.zero,
+//                4u, NativePtr.zero
+//            )
+//
+//        let mutable info =
+//            VkBindImageMemoryInfoKHR(
+//                VkStructureType.BindImageMemoryInfoKhr, 0n,
+//                img,
+//                mem,
+//                offset
+//            )
+//
+//        VkRaw.vkBindImageMemory2KHR(device.Handle, 1u, &&info)
+//            |> ignore
+
+
+        
+        let device = 
+            let runtime = unbox<Runtime> runtime
+            runtime.Device
 
         let colors =
             OutputMod.custom 
@@ -340,8 +499,10 @@ module Utilities =
         let resolved =
             OutputMod.custom 
                 []
-                (fun t -> runtime.CreateTextureArray(s.GetValue t, TextureFormat.Rgba8, 1, 1, 2))
-                (fun t h -> h.Size.XY = s.GetValue t)
+                
+                //(fun t -> runtime.CreateTexture(s.GetValue t * V2i(2,1), TextureFormat.Rgba8, 1, 1))
+                (fun t -> createMultiDeviceTexture (s.GetValue t * V2i(2,1)) TextureFormat.Rgba8 device :> IBackendTexture)
+                (fun t h -> h.Size.XY = s.GetValue t * V2i(2,1))
                 (fun h -> runtime.DeleteTexture h)
                 id
                 
@@ -403,6 +564,117 @@ module Utilities =
             let clearTask =
                 runtime.CompileClear(signature, ~~C4f.Black, ~~1.0)
 
+
+
+            let copy (src : Image) (dst : Image) =
+                { new Command() with
+                    member x.Compatible = QueueFlags.All
+                    member x.Enqueue(cmd) =
+                        cmd.AppendCommand()
+
+                        VkRaw.vkCmdSetDeviceMaskKHX(cmd.Handle, 1u)
+                        let mutable resolve =
+                            VkImageCopy(
+                                src.[ImageAspect.Color, 0, 0].VkImageSubresourceLayers,
+                                VkOffset3D(0, 0, 0),
+                                dst.[ImageAspect.Color, 0, 0].VkImageSubresourceLayers,
+                                VkOffset3D(0, 0, 0),
+                                VkExtent3D(src.Size.X, src.Size.Y, src.Size.Z)
+                            )
+
+                        VkRaw.vkCmdCopyImage(cmd.Handle, src.Handle, VkImageLayout.TransferSrcOptimal, dst.Handle, VkImageLayout.TransferDstOptimal, 1u, &&resolve)
+
+                        VkRaw.vkCmdSetDeviceMaskKHX(cmd.Handle, 2u)
+                        let mutable resolve =
+                            VkImageCopy(
+                                src.[ImageAspect.Color, 0, 0].VkImageSubresourceLayers,
+                                VkOffset3D(0, 0, 0),
+                                dst.[ImageAspect.Color, 0, 0].VkImageSubresourceLayers,
+                                VkOffset3D(src.Size.X, 0, 0),
+                                VkExtent3D(src.Size.X, src.Size.Y, src.Size.Z)
+                            )
+
+                        VkRaw.vkCmdCopyImage(cmd.Handle, src.Handle, VkImageLayout.TransferSrcOptimal, dst.Handle, VkImageLayout.TransferDstOptimal, 1u, &&resolve)
+                        VkRaw.vkCmdSetDeviceMaskKHX(cmd.Handle, 3u)
+                        Disposable.Empty
+                }
+
+            let clear (img : Image) =
+                { new Command() with
+                    member x.Compatible = QueueFlags.All
+                    member x.Enqueue(cmd) =
+                        VkRaw.vkCmdSetDeviceMaskKHX(cmd.Handle, 1u)
+                        let mutable color = VkClearColorValue(float32 = V4f(1.0f, 0.0f, 0.0f, 1.0f))
+                        let mutable range = img.[ImageAspect.Color].VkImageSubresourceRange
+                        VkRaw.vkCmdClearColorImage(cmd.Handle, img.Handle, VkImageLayout.TransferDstOptimal, &&color, 1u, &&range)
+
+                        
+                        VkRaw.vkCmdSetDeviceMaskKHX(cmd.Handle, 2u)
+                        let mutable color = VkClearColorValue(float32 = V4f(0.0f, 1.0f, 0.0f, 1.0f))
+                        let mutable range = img.[ImageAspect.Color].VkImageSubresourceRange
+                        VkRaw.vkCmdClearColorImage(cmd.Handle, img.Handle, VkImageLayout.TransferDstOptimal, &&color, 1u, &&range)
+                        
+                        VkRaw.vkCmdSetDeviceMaskKHX(cmd.Handle, 3u)
+                        
+                        Disposable.Empty
+                }   
+
+            
+            let clearTarget (img : Image) =
+                { new Command() with
+                    member x.Compatible = QueueFlags.All
+                    member x.Enqueue(cmd) =
+                        VkRaw.vkCmdSetDeviceMaskKHX(cmd.Handle, 1u)
+                        let mutable color = VkClearColorValue(float32 = V4f(0.0f, 1.0f, 1.0f, 1.0f))
+                        let mutable range = img.[ImageAspect.Color].VkImageSubresourceRange
+                        VkRaw.vkCmdClearColorImage(cmd.Handle, img.Handle, VkImageLayout.TransferDstOptimal, &&color, 1u, &&range)
+
+                        
+                        VkRaw.vkCmdSetDeviceMaskKHX(cmd.Handle, 2u)
+                        let mutable color = VkClearColorValue(float32 = V4f(1.0f, 1.0f, 0.0f, 1.0f))
+                        let mutable range = img.[ImageAspect.Color].VkImageSubresourceRange
+                        VkRaw.vkCmdClearColorImage(cmd.Handle, img.Handle, VkImageLayout.TransferDstOptimal, &&color, 1u, &&range)
+                        
+                        VkRaw.vkCmdSetDeviceMaskKHX(cmd.Handle, 3u)
+                        
+                        Disposable.Empty
+                }   
+
+            let copyToBuffer (src : Image) (deviceIndex : int) (dst : Buffer) =
+                { new Command() with
+                    member x.Compatible = QueueFlags.All
+                    member x.Enqueue(cmd) =
+                        cmd.AppendCommand()
+
+//                        VkRaw.vkCmdSetDeviceMaskKHX(cmd.Handle, 3u)
+//                        let mutable resolve =
+//                            VkBufferImageCopy(
+//                                0UL,
+//                                0u, 0u, 
+//                                src.[ImageAspect.Color, 0, 0].VkImageSubresourceLayers,
+//                                VkOffset3D(0, 0, 0),
+//                                VkExtent3D(src.Size.X, src.Size.Y, src.Size.Z)
+//                            )
+//
+//                        VkRaw.vkCmdCopyImageToBuffer(cmd.Handle, src.Handle, VkImageLayout.TransferSrcOptimal, dst.Handle, 1u, &&resolve)
+//
+                        VkRaw.vkCmdSetDeviceMaskKHX(cmd.Handle, 1u <<< deviceIndex)
+                        let mutable resolve =
+                            VkBufferImageCopy(
+                                0UL,
+                                0u, 0u, 
+                                src.[ImageAspect.Color, 0, deviceIndex].VkImageSubresourceLayers,
+                                VkOffset3D(0, 0, 0),
+                                VkExtent3D(src.Size.X, src.Size.Y, src.Size.Z)
+                            )
+
+                        VkRaw.vkCmdCopyImageToBuffer(cmd.Handle, src.Handle, VkImageLayout.TransferSrcOptimal, dst.Handle, 1u, &&resolve)
+                        VkRaw.vkCmdSetDeviceMaskKHX(cmd.Handle, 3u)
+                        Disposable.Empty
+                }
+
+
+
             let dependent =
                 Mod.custom (fun t ->
                     let fbo = framebuffer.GetValue t
@@ -412,7 +684,92 @@ module Utilities =
 
                     clearTask.Run(t, RenderToken.Empty, output)
                     stereoTask.Run(t, RenderToken.Empty, output)
-                    runtime.Copy(colors.GetValue(t), 0, 0, r, 0, 0, 2, 1)
+
+
+                    let src = colors.GetValue(t) |> unbox<Image>
+                    let r = r |> unbox<Image>
+
+                    use cmd = device.GraphicsFamily.DefaultCommandPool.CreateCommandBuffer(CommandBufferLevel.Primary)
+
+                    let beginCmd(cmd : CommandBuffer) =
+                        let mutable groupInfo =
+                            VkDeviceGroupCommandBufferBeginInfoKHX(
+                                VkStructureType.DeviceGroupCommandBufferBeginInfoKhx, 0n,
+                                3u
+                            )
+
+                        let mutable info =
+                            VkCommandBufferBeginInfo(
+                                VkStructureType.CommandBufferBeginInfo, NativePtr.toNativeInt &&groupInfo,
+                                VkCommandBufferUsageFlags.OneTimeSubmitBit,
+                                NativePtr.zero
+                            )
+
+                        VkRaw.vkBeginCommandBuffer(
+                            cmd.Handle,
+                            &&info
+                        ) |> ignore
+
+                        cmd.Recording <- true
+
+                    let b = device.HostMemory |> Buffer.create VkBufferUsageFlags.TransferDstBit (4L * int64 src.Size.X * int64 src.Size.Y)
+
+                    beginCmd cmd
+                    cmd.enqueue {
+                        let sl = src.Layout
+                        let rl = r.Layout
+                        do! Command.TransformLayout(r, VkImageLayout.TransferDstOptimal)
+                        do! Command.TransformLayout(src, VkImageLayout.TransferDstOptimal)
+                        do! clear src
+                        do! clearTarget r
+                        do! Command.TransformLayout(src, VkImageLayout.TransferSrcOptimal)
+                        do! copyToBuffer src 0 b
+                        do! copy src r
+                        do! Command.TransformLayout(src, sl)
+                        do! Command.TransformLayout(r, rl)
+                    }
+                    cmd.End()
+
+
+                    let queue = device.GraphicsFamily.GetQueue()
+                    let fence = device.CreateFence()
+                    lock queue (fun () ->
+                        let mutable handle = cmd.Handle
+                        let mutable mask = 3u
+                        let mutable submitInfoKhx =
+                            VkDeviceGroupSubmitInfoKHX(
+                                VkStructureType.DeviceGroupSubmitInfoKhx, 0n, 
+                                0u, NativePtr.zero,
+                                1u, &&mask,
+                                0u, NativePtr.zero
+                            )
+
+                        let mutable submitInfo =
+                            VkSubmitInfo(
+                                VkStructureType.SubmitInfo, NativePtr.toNativeInt &&submitInfoKhx,
+                                0u, NativePtr.zero, NativePtr.zero,
+                                1u, &&handle,
+                                0u, NativePtr.zero
+                            )
+                            
+                        VkRaw.vkQueueSubmit(queue.Handle, 1u, &&submitInfo, fence.Handle)
+                            |> ignore
+                    )
+                    fence.Wait()
+                    fence.Dispose()
+
+                    let img = PixImage<byte>(Col.Format.RGBA, src.Size.XY)
+                    b.Memory.MappedTensor4 (V4i(src.Size.X, src.Size.Y, 1, 4), fun (src : NativeTensor4<byte>) ->
+                        NativeVolume.using img.Volume (fun pDst ->
+                            NativeVolume.copy src.[*,*,0,*] pDst
+                        )
+                    )
+                    img.SaveAsImage @"C:\Users\Harald\Desktop\stereo.jpg"
+
+                    device.Delete b
+
+                    //device.GraphicsFamily.RunSynchronously cmd
+                    //runtime.Copy(colors.GetValue(t), 0, 0, r, 0, 0, 2, 1)
 
                     r :> ITexture
                 )
@@ -422,7 +779,7 @@ module Utilities =
                     |> Sg.uniform "Dependent" (Mod.constant 0.0)
                     |> Sg.diffuseTexture dependent
                     |> Sg.shader {
-                        do! Shader.renderStereo
+                        do! DefaultSurfaces.diffuseTexture
                     }
                     |> Sg.compile runtime win.FramebufferSignature
 

@@ -477,6 +477,8 @@ and IRuntime =
     inherit ITextureRuntime
     inherit IComputeRuntime
 
+    abstract member DeviceCount : int
+
     abstract member OnDispose : Microsoft.FSharp.Control.IEvent<unit>
     abstract member ResourceManager : IResourceManager
     abstract member ContextLock : IDisposable

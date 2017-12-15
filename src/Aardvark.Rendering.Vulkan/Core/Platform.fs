@@ -16,7 +16,10 @@ open KHXDeviceGroupCreation
 type Instance(apiVersion : Version, layers : Set<string>, extensions : Set<string>) as this =   
     inherit VulkanObject()
 
-    let extensions = extensions |> Set.add "VK_KHX_device_group_creation" //|> Set.add "VK_KHX_device_group"
+    let extensions = 
+        extensions 
+         |> Set.add "VK_KHX_device_group_creation" 
+         |> Set.add "VK_KHX_device_group"
 
     static let availableLayers =
         let mutable count = 0u
@@ -167,7 +170,7 @@ type Instance(apiVersion : Version, layers : Set<string>, extensions : Set<strin
     member x.Devices = devices
     member x.DeviceGroups = groups
 
-    member x.PrintInfo(l : ILogger, chosenDevice : int) =
+    member x.PrintInfo(l : ILogger, chosenHandles : Set<VkPhysicalDevice>) =
         let caps = 
             [
                 QueueFlags.Compute, "compute"
@@ -199,14 +202,15 @@ type Instance(apiVersion : Version, layers : Set<string>, extensions : Set<strin
             )
 
             l.section "devices:" (fun () ->
+
                 for d in devices do
                     let l =
-                        if d.Index = chosenDevice then l
+                        if Set.contains d.Handle chosenHandles then l
                         else l.WithVerbosity(l.Verbosity + 1)
 
 
                     l.section "%d:" d.Index (fun () ->
-                        if d.Index = chosenDevice then 
+                        if Set.contains d.Handle chosenHandles then 
                             l.line "CHOSEN DEVICE"
                         l.line "type:     %A" d.Type
                         l.line "vendor:   %s" d.Vendor
@@ -256,6 +260,12 @@ type Instance(apiVersion : Version, layers : Set<string>, extensions : Set<strin
                     )
             )
 
+            let chosen = devices |> Array.filter (fun d -> Set.contains d.Handle chosenHandles)
+            if chosen.Length > 1 then
+                l.section "device group:" (fun () ->
+                    for c in chosen do
+                        l.line "%d: %s %s" c.Index c.Vendor c.Name
+                )
         )
 
 and PhysicalDeviceGroup(instance : Instance, handle : VkPhysicalDeviceGroupPropertiesKHX, index : int) =

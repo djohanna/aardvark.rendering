@@ -85,7 +85,7 @@ module VisualDeviceChooser =
 
 
 
-type VulkanApplication(debug : bool, chooseDevice : list<PhysicalDevice> -> PhysicalDevice) =
+type VulkanApplication(debug : bool, useMultiGpu : bool, chooseDevice : list<PhysicalDevice> -> PhysicalDevice) =
     let requestedExtensions =
         [
             yield Instance.Extensions.Surface
@@ -93,6 +93,9 @@ type VulkanApplication(debug : bool, chooseDevice : list<PhysicalDevice> -> Phys
             yield Instance.Extensions.Win32Surface
             yield Instance.Extensions.XcbSurface
             yield Instance.Extensions.XlibSurface
+            
+            yield KHXDeviceGroup.Name
+            yield KHRBindMemory2.Name
 
             if debug then
                 yield Instance.Extensions.DebugReport
@@ -129,26 +132,48 @@ type VulkanApplication(debug : bool, chooseDevice : list<PhysicalDevice> -> Phys
         new Instance(Version(1,0,0), enabledLayers, enabledExtensions)
 
     // choose a physical device
-    let physicalDevice = 
+    let physicalDevice () = 
         if instance.Devices.Length = 0 then
             failwithf "[Vulkan] could not get vulkan devices"
         else
             chooseDevice (Array.toList instance.Devices)
 
-    do instance.PrintInfo(Logger.Get 2, physicalDevice.Index)
 
     // create a device
     let device = 
-        let availableExtensions =
-            physicalDevice.GlobalExtensions |> Seq.map (fun e -> e.name) |> Set.ofSeq
+        match useMultiGpu with
+            | true ->
+                let virtualDevice = instance.DeviceGroups.[0]
+                
+                let handles = virtualDevice.Devices |> Array.toList |> List.map (fun d -> d.Handle) |> Set.ofList
+                do instance.PrintInfo(Logger.Get 2, handles)
 
-        let availableLayers =
-            physicalDevice.AvailableLayers |> Seq.map (fun l -> l.name) |> Set.ofSeq
+                let availableExtensions =
+                    virtualDevice.GlobalExtensions |> Seq.map (fun e -> e.name) |> Set.ofSeq
 
-        let enabledExtensions = requestedExtensions |> List.filter (fun r -> Set.contains r availableExtensions) |> Set.ofList
-        let enabledLayers = requestedLayers |> List.filter (fun r -> Set.contains r availableLayers) |> Set.ofList
+                let availableLayers =
+                    virtualDevice.AvailableLayers |> Seq.map (fun l -> l.name) |> Set.ofSeq
+
+                let enabledExtensions = 
+                    requestedExtensions 
+                    |> Set.ofList
+                    |> Set.filter (fun r -> Set.contains r availableExtensions) 
+                let enabledLayers = requestedLayers |> List.filter (fun r -> Set.contains r availableLayers) |> Set.ofList
         
-        physicalDevice.CreateDevice(enabledLayers, enabledExtensions)
+                virtualDevice.CreateDevice(enabledLayers, enabledExtensions)
+            | false -> 
+                let physicalDevice = physicalDevice()
+                do instance.PrintInfo(Logger.Get 2, Set.singleton physicalDevice.Handle)
+                let availableExtensions =
+                    physicalDevice.GlobalExtensions |> Seq.map (fun e -> e.name) |> Set.ofSeq
+
+                let availableLayers =
+                    physicalDevice.AvailableLayers |> Seq.map (fun l -> l.name) |> Set.ofSeq
+
+                let enabledExtensions = requestedExtensions |> List.filter (fun r -> Set.contains r availableExtensions) |> Set.ofList
+                let enabledLayers = requestedLayers |> List.filter (fun r -> Set.contains r availableLayers) |> Set.ofList
+        
+                physicalDevice.CreateDevice(enabledLayers, enabledExtensions)
 
     // create a runtime
     let runtime = new Runtime(device, false, false, debug)
@@ -194,6 +219,7 @@ type VulkanApplication(debug : bool, chooseDevice : list<PhysicalDevice> -> Phys
         member x.Dispose() = x.Dispose()
 
 
-    new(debug)      = new VulkanApplication(debug, VisualDeviceChooser.run)
-    new(chooser)    = new VulkanApplication(false, chooser)
-    new()           = new VulkanApplication(false, VisualDeviceChooser.run)
+    new(debug)          = new VulkanApplication(debug, false   , VisualDeviceChooser.run)
+    new(debug,multiGpu) = new VulkanApplication(debug, multiGpu, VisualDeviceChooser.run)
+    new(chooser)    = new VulkanApplication(false, false, chooser)
+    new()           = new VulkanApplication(false, false, VisualDeviceChooser.run)

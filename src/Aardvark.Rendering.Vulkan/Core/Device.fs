@@ -9,7 +9,7 @@ open System.Runtime.CompilerServices
 open Microsoft.FSharp.NativeInterop
 open Aardvark.Base
 open KHXDeviceGroupCreation
-
+open KHXDeviceGroup
 #nowarn "9"
 #nowarn "51"
 
@@ -385,6 +385,7 @@ type Device internal(isGroup : bool, deviceGroup : PhysicalDevice[], wantedLayer
     member x.Handle = device
 
     member x.PhysicalDevice = physical
+    member x.PhysicalDevices = deviceGroup
 
     member x.CreateFence(signaled : bool) = new Fence(x, signaled)
     member x.CreateFence() = new Fence(x)
@@ -859,6 +860,11 @@ and CommandBuffer internal(device : Device, pool : VkCommandPool, queueFamily : 
         for c in cleanupTasks do c.Dispose()
         cleanupTasks.Clear()
 
+    member x.Recording
+        with get() = recording
+        and set r = recording <- r
+        
+
     member x.Reset() =
         cleanup()
 
@@ -904,9 +910,15 @@ and CommandBuffer internal(device : Device, pool : VkCommandPool, queueFamily : 
                 VkQueryPipelineStatisticFlags.None
             )
 
+        let mutable multiDev =
+            VkDeviceGroupCommandBufferBeginInfoKHX(
+                VkStructureType.DeviceGroupCommandBufferBeginInfoKhx, 0n,
+                3u
+            )
+
         let mutable info =
             VkCommandBufferBeginInfo(
-                VkStructureType.CommandBufferBeginInfo, 0n,
+                VkStructureType.CommandBufferBeginInfo, (if device.PhysicalDevices.Length > 1 then NativePtr.toNativeInt &&multiDev else 0n),
                 unbox (int usage),
                 &&inh
             )
@@ -1615,7 +1627,7 @@ and DeviceMemoryManager internal(heap : DeviceHeap, virtualSize : int64, blockSi
         )
             
 
-and DeviceMemory internal(heap : DeviceHeap, handle : VkDeviceMemory, size : int64, hostPtr : nativeint) =
+and DeviceMemory (heap : DeviceHeap, handle : VkDeviceMemory, size : int64, hostPtr : nativeint) =
     inherit DevicePtr(Unchecked.defaultof<_>, 0L, size)
     static let nullptr = new DeviceMemory(Unchecked.defaultof<_>, VkDeviceMemory.Null, 0L, 0n)
 

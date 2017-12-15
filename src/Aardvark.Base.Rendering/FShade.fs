@@ -252,6 +252,35 @@ module FShadeInterop =
             RenderbufferFormat.Rgb10A2ui, typeof<V4d>
         ]
 
+    [<GLSLIntrinsic("gl_DeviceIndex", "GL_EXT_device_group")>]
+    let private deviceIndex() : int = failwith ""
+
+    open FShade.Imperative
+    let private withDeviceIndex (deviceCount : int) (e : Effect) =
+        match e.GeometryShader with
+            | Some gs ->
+                assert (gs.shaderInvocations % deviceCount = 0)
+                let newInvocations = gs.shaderInvocations / deviceCount
+
+                let gs = 
+                    gs |> Shader.substituteReads (fun kind typ name index ->
+                        match kind, index with
+                            | ParameterKind.Input, None when name = Intrinsics.InvocationId ->
+                                if newInvocations = 1 then
+                                    Some <@@ deviceIndex() @@>
+                                else
+                                    let iid = Expr.ReadInput<int>(kind, name)
+                                    let did = <@ deviceIndex() @>
+
+                                    Some <@@ %did * newInvocations + %iid @@>
+                            | _ ->
+                                None
+                    )
+
+                Effect.add { gs with shaderInvocations = newInvocations } e
+            | None ->
+                e
+
     type AttachmentSignature with
         member x.GetType(name : Symbol) =
             match builtInTypes.TryGetValue name with
@@ -283,9 +312,15 @@ module FShadeInterop =
                 }
 
             if x.LayerCount > 1 then
+
+                let adjustForDevices =
+                    if x.Runtime.DeviceCount > 1 then withDeviceIndex x.Runtime.DeviceCount
+                    else id
+
                 effect 
                     // TODO: other topologies????
                     |> Effect.toLayeredEffect x.LayerCount (x.PerLayerUniforms |> Seq.map (fun n -> n, n) |> Map.ofSeq) InputTopology.Triangle
+                    |> adjustForDevices
                     |> Effect.toModule config
 
             else

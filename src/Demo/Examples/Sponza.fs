@@ -23,14 +23,14 @@ module Sponza =
 
         let win = 
             window {
-                display Display.Mono
+                display Display.Stereo
                 samples 8
-                backend Backend.Both
+                backend Backend.Vulkan
                 debug true
             }
 
         let sg = 
-            Aardvark.SceneGraph.IO.Loader.Assimp.loadFrom @"E:\Development\WorkDirectory\Sponza bunt\sponza_cm.obj" Loader.Assimp.defaultFlags
+            Aardvark.SceneGraph.IO.Loader.Assimp.loadFrom @"C:\Users\Harald\Desktop\Sponza bunt\sponza_cm.obj" Loader.Assimp.defaultFlags
                 |> Sg.adapter
                 |> Sg.scale (0.01)
                 |> Sg.transform (Trafo3d.FromBasis(V3d.IOO, V3d.OOI, V3d.OIO, V3d.Zero))
