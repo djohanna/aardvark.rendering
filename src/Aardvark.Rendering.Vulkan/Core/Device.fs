@@ -277,6 +277,19 @@ type Device internal(isGroup : bool, deviceGroup : PhysicalDevice[], wantedLayer
 
     let caches = System.Collections.Concurrent.ConcurrentDictionary<Symbol, obj>()
 
+    let allMask = deviceGroup |> Array.map (fun d -> 1u <<< d.Index) |> Array.fold (|||) 0u
+    let all = deviceGroup |> Array.map (fun d -> uint32 d.Index)
+    let pAllDeviceIndices = 
+        let ptr = NativePtr.alloc all.Length
+        for i in 0 .. all.Length - 1 do
+            NativePtr.set ptr i all.[i]
+        ptr
+
+    member x.IsGroup = isGroup
+    member x.AllMask = allMask
+    member x.AllDeviceIndicesPtr = pAllDeviceIndices
+    member x.AllDeviceIndicesCnt = uint32 all.Length
+
     member x.GetCache(name : Symbol, create : 'a -> 'b) =
         let res =
             caches.GetOrAdd(name, fun name ->
@@ -343,9 +356,9 @@ type Device internal(isGroup : bool, deviceGroup : PhysicalDevice[], wantedLayer
 
     member x.Instance = instance
 
-    member internal x.AllQueueFamiliesPtr = pAllFamilies
-    member internal x.AllQueueFamiliesCnt = pAllFamiliesCnt
-    member internal x.AllSharingMode = concurrentSharingMode
+    member x.AllQueueFamiliesPtr = pAllFamilies
+    member x.AllQueueFamiliesCnt = pAllFamiliesCnt
+    member x.AllSharingMode = concurrentSharingMode
 
     member x.GraphicsFamily = 
         match graphicsFamily with
@@ -502,9 +515,24 @@ and DeviceQueue internal(device : Device, deviceHandle : VkDevice, familyInfo : 
             let fence = device.CreateFence()
             lock x (fun () ->
                 let mutable handle = cmd.Handle
+
+
+                let mutable mask = device.AllMask
+                let mutable ptr = 0n
+                let mutable info =
+                    VkDeviceGroupSubmitInfoKHX(
+                        VkStructureType.DeviceGroupSubmitInfoKhx, 0n,
+                        0u, NativePtr.zero,
+                        1u, &&mask,
+                        0u, NativePtr.zero
+                    )
+
+                if device.IsGroup then
+                    ptr <- NativePtr.toNativeInt &&info
+
                 let mutable submitInfo =
                     VkSubmitInfo(
-                        VkStructureType.SubmitInfo, 0n,
+                        VkStructureType.SubmitInfo, ptr,
                         0u, NativePtr.zero, NativePtr.zero,
                         1u, &&handle,
                         0u, NativePtr.zero
@@ -528,9 +556,24 @@ and DeviceQueue internal(device : Device, deviceHandle : VkDevice, familyInfo : 
 
             match waitFor with
                 | [] ->
+
+                    let mutable mask = device.AllMask
+                    let mutable ptr = 0n
+                    let mutable info =
+                        VkDeviceGroupSubmitInfoKHX(
+                            VkStructureType.DeviceGroupSubmitInfoKhx, 0n,
+                            0u, NativePtr.zero,
+                            1u, &&mask,
+                            device.AllDeviceIndicesCnt, device.AllDeviceIndicesPtr
+                        )
+
+                    if device.IsGroup then
+                        ptr <- NativePtr.toNativeInt &&info
+
+
                     let mutable submitInfo =
                         VkSubmitInfo(
-                            VkStructureType.SubmitInfo, 0n,
+                            VkStructureType.SubmitInfo, ptr,
                             0u, NativePtr.zero, NativePtr.zero,
                             cnt, &&handle,
                             1u, &&semHandle
@@ -546,9 +589,25 @@ and DeviceQueue internal(device : Device, deviceHandle : VkDevice, familyInfo : 
             
                     mask |> NativePtr.withA (fun pMask ->
                         handles |> NativePtr.withA (fun pWaitFor ->
+
+                        
+                            let mutable mask = device.AllMask
+                            let mutable ptr = 0n
+                            let mutable info =
+                                VkDeviceGroupSubmitInfoKHX(
+                                    VkStructureType.DeviceGroupSubmitInfoKhx, 0n,
+                                    device.AllDeviceIndicesCnt, device.AllDeviceIndicesPtr,
+                                    1u, &&mask,
+                                    device.AllDeviceIndicesCnt, device.AllDeviceIndicesPtr
+                                )
+
+                            if device.IsGroup then
+                                ptr <- NativePtr.toNativeInt &&info
+
+
                             let mutable submitInfo =
                                 VkSubmitInfo(
-                                    VkStructureType.SubmitInfo, 0n,
+                                    VkStructureType.SubmitInfo, ptr,
                                     uint32 handles.Length, pWaitFor, NativePtr.cast pMask,
                                     cnt, &&handle,
                                     1u, &&semHandle
@@ -1322,6 +1381,7 @@ and DeviceHeap internal(device : Device, memory : MemoryInfo, heap : MemoryHeapI
     member internal x.Mask = mask
     member x.IsHostVisible = hostVisible
     member x.HeapFlags = heap.Flags
+    member x.HeapIndex = heap.Index
     member x.Flags = memory.flags
     member x.Available = heap.Available
     member x.Allocated = heap.Allocated

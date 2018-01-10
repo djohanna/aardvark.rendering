@@ -3231,7 +3231,7 @@ type VkWriteDescriptorSet =
 
 module VkRaw = 
     [<CompilerMessage("activeInstance is for internal use only", 1337, IsError=false, IsHidden=true)>]
-    let mutable internal activeInstance : VkInstance = 0n
+    let mutable activeInstance : VkInstance = 0n
     [<Literal>]
     let lib = "vulkan-1.dll"
 
