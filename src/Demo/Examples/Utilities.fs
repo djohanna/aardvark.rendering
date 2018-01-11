@@ -16,6 +16,11 @@ open Aardvark.Rendering.Text
 open Aardvark.Application.OpenVR
 open Aardvark.Rendering.Vulkan.KHXDeviceGroup
 open KHRBindMemory2
+open KHXDeviceGroup
+open KHXDeviceGroup.KHRBindMemory2
+
+#nowarn "9"
+#nowarn "51"
 
 [<RequireQualifiedAccess>]
 type Backend =
@@ -64,26 +69,26 @@ module Utilities =
     open System.Runtime.InteropServices
 
 
-    type VkStructureType with   
-        static member VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO_KHX  = unbox<VkStructureType> 1000060002
-
-    [<StructLayout(LayoutKind.Sequential)>]
-    type VkBindImageMemoryInfoKHX = 
-        struct
-            val mutable public sType : VkStructureType
-            val mutable public pNext : nativeint
-            val mutable public image : VkImage
-            val mutable public memory : VkDeviceMemory
-            val mutable public memoryOffset : VkDeviceSize
-            val mutable public deviceIndexCount : uint32
-            val mutable public pDeviceIndices : nativeptr<uint32>
-            val mutable public _SFRRectCount : uint32
-            val mutable public pSFRRects : nativeptr<VkRect2D>
-        
-            new(sType : VkStructureType, pNext : nativeint, image : VkImage, memory : VkDeviceMemory, memoryOffset : VkDeviceSize, deviceIndexCount : uint32, pDeviceIndices : nativeptr<uint32>, _SFRRectCount : uint32, pSFRRects : nativeptr<VkRect2D>) = { sType = sType; pNext = pNext; image = image; memory = memory; memoryOffset = memoryOffset; deviceIndexCount = deviceIndexCount; pDeviceIndices = pDeviceIndices; _SFRRectCount = _SFRRectCount; pSFRRects = pSFRRects }
-        end
-        
-    type VkBindImageMemory2KHXDel = delegate of VkDevice * uint32 * nativeptr<VkBindImageMemoryInfoKHX> -> VkResult
+//    type VkStructureType with   
+//        static member VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO_KHX  = unbox<VkStructureType> 1000060002
+//
+//    [<StructLayout(LayoutKind.Sequential)>]
+//    type VkBindImageMemoryInfoKHX = 
+//        struct
+//            val mutable public sType : VkStructureType
+//            val mutable public pNext : nativeint
+//            val mutable public image : VkImage
+//            val mutable public memory : VkDeviceMemory
+//            val mutable public memoryOffset : VkDeviceSize
+//            val mutable public deviceIndexCount : uint32
+//            val mutable public pDeviceIndices : nativeptr<uint32>
+//            val mutable public _SFRRectCount : uint32
+//            val mutable public pSFRRects : nativeptr<VkRect2D>
+//        
+//            new(sType : VkStructureType, pNext : nativeint, image : VkImage, memory : VkDeviceMemory, memoryOffset : VkDeviceSize, deviceIndexCount : uint32, pDeviceIndices : nativeptr<uint32>, _SFRRectCount : uint32, pSFRRects : nativeptr<VkRect2D>) = { sType = sType; pNext = pNext; image = image; memory = memory; memoryOffset = memoryOffset; deviceIndexCount = deviceIndexCount; pDeviceIndices = pDeviceIndices; _SFRRectCount = _SFRRectCount; pSFRRects = pSFRRects }
+//        end
+//        
+//    type VkBindImageMemory2KHXDel = delegate of VkDevice * uint32 * nativeptr<VkBindImageMemoryInfoKHX> -> VkResult
 
 
 //    typedef struct VkBindImageMemoryInfoKHX {
@@ -324,20 +329,20 @@ module Utilities =
 
         } :> ISimpleRenderWindow
 
-    type VkImageCreateFlags with
-        static member VK_IMAGE_CREATE_BIND_SFR_BIT_KHX = unbox<VkImageCreateFlags> 64
-        static member VK_IMAGE_CREATE_ALIAS_BIT_KHR = unbox<VkImageCreateFlags> 0x00000400
-
-    type VkHate<'a>() =
-//        static let vkBindImageMemory2KHXDel = 
-//            let ptr = VkRaw.vkGetInstanceProcAddr(VkRaw.activeInstance, "vkBindImageMemory2KHX")
-//            Marshal.GetDelegateForFunctionPointer(ptr, typeof<VkBindImageMemory2KHXDel>) |> unbox<VkBindImageMemory2KHXDel>
-        static member vkBindImageMemory2KHX(a,b,c) = 
-            let ptr = VkRaw.vkGetDeviceProcAddr(a, "vkBindImageMemory2KHX")
-            let del = Marshal.GetDelegateForFunctionPointer(ptr, typeof<VkBindImageMemory2KHXDel>) |> unbox<VkBindImageMemory2KHXDel>
-            
-            del.Invoke(a,b,c)
-            
+//    type VkImageCreateFlags with
+//        static member VK_IMAGE_CREATE_BIND_SFR_BIT_KHX = unbox<VkImageCreateFlags> 64
+//        static member VK_IMAGE_CREATE_ALIAS_BIT_KHR = unbox<VkImageCreateFlags> 0x00000400
+//
+//    type VkHate<'a>() =
+////        static let vkBindImageMemory2KHXDel = 
+////            let ptr = VkRaw.vkGetInstanceProcAddr(VkRaw.activeInstance, "vkBindImageMemory2KHX")
+////            Marshal.GetDelegateForFunctionPointer(ptr, typeof<VkBindImageMemory2KHXDel>) |> unbox<VkBindImageMemory2KHXDel>
+//        static member vkBindImageMemory2KHX(a,b,c) = 
+//            let ptr = VkRaw.vkGetDeviceProcAddr(a, "vkBindImageMemory2KHX")
+//            let del = Marshal.GetDelegateForFunctionPointer(ptr, typeof<VkBindImageMemory2KHXDel>) |> unbox<VkBindImageMemory2KHXDel>
+//            
+//            del.Invoke(a,b,c)
+//            
 
     let createMultiDeviceTexture2 (size : V2i) (format : TextureFormat) (device : Device) =
         
@@ -352,7 +357,7 @@ module Utilities =
         let mutable imageInfo =
             VkImageCreateInfo(
                 VkStructureType.ImageCreateInfo, 0n,
-                VkImageCreateFlags.VK_IMAGE_CREATE_ALIAS_BIT_KHR,
+                VkImageCreateFlags.AliasBitKhr,
                 VkImageType.D2d,
                 VkFormat.ofTextureFormat format,
                 VkExtent3D(size.X, size.Y, 1),
@@ -378,7 +383,7 @@ module Utilities =
         let mutable allocInfo =
             VkMemoryAllocateFlagsInfoKHX(
                 VkStructureType.MemoryAllocateFlagsInfoKhx, 0n,
-                uint32 (int VkMemoryAllocateFlagBitsKHX.VkMemoryAllocateDeviceMaskBitKhx),
+                unbox (int VkMemoryAllocateFlagBitsKHX.VkMemoryAllocateDeviceMaskBitKhx),
                 3u
             )
 
@@ -416,14 +421,14 @@ module Utilities =
 
                 let mutable bindInfo =
                     VkBindImageMemoryInfoKHX(
-                        VkStructureType.VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO_KHX, 0n,
+                        VkStructureType.BindImageMemoryInfoKhx, 0n,
                         localImg,
                         mem.Handle, 0UL,
                         2u, pDeviceIndices,
                         0u, NativePtr.zero
                     )
 
-                VkHate<unit>.vkBindImageMemory2KHX(device.Handle, 1u, &&bindInfo) |> printfn "BIND: %A"
+                VkRaw.vkBindImageMemory2KHX(device.Handle, 1u, &&bindInfo) |> printfn "BIND: %A"
 
             )
 
@@ -456,14 +461,14 @@ module Utilities =
 //                VkRaw.vkBindImageMemory2KHR(device.Handle, 1u, &&bindInfo) |> printfn "BIND: %A"
                 let mutable bindInfo =
                     VkBindImageMemoryInfoKHX(
-                        VkStructureType.VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO_KHX, 0n,
+                        VkStructureType.BindImageMemoryInfoKhx, 0n,
                         peerImg,
                         mem.Handle, 0UL,
                         2u, pDeviceIndices,
                         0u, NativePtr.zero
                     )
 
-                VkHate<unit>.vkBindImageMemory2KHX(device.Handle, 1u, &&bindInfo) |> printfn "BIND: %A"
+                VkRaw.vkBindImageMemory2KHX(device.Handle, 1u, &&bindInfo) |> printfn "BIND: %A"
             )
 
         let lImg = new Aardvark.Rendering.Vulkan.Image(device, localImg, V3i(size, 1), 1, 1, 1, TextureDimension.Texture2D, VkFormat.ofTextureFormat format, mem, VkImageLayout.Undefined)
